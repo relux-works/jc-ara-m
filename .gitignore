@@ -1,0 +1,19 @@
+# Gradle and Java build outputs
+.gradle/
+build/
+out/
+*.class
+
+# Java Card converter outputs
+artifacts/
+*.cap
+*.exp
+*.jca
+
+# IDE and OS files
+.idea/
+*.iml
+.DS_Store
+
+# Task-local scratch
+.temp/
