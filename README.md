@@ -8,6 +8,8 @@ to the phase-1/phase-2 access-control flow it was built for:
 - store one validated `REF-AR-DO`;
 - return that rule to Android's `AccessControlEnforcer`;
 - replace the slot with a later `STORE DATA`;
+- receive authenticated personalization data through the standard
+  `org.globalplatform.Application` contract;
 - support empty, SHA-1, and SHA-256 `DeviceAppID-REF-DO` values without
   changing the persistent representation.
 
@@ -116,6 +118,19 @@ As one hex string:
 80E2900015F013E211E10A4F06F0000000AA01C100E303D00101
 ```
 
+For authenticated Security Domain provisioning, send these two APDUs in one
+`gp-t0-helper secure-apdu` session. The first enters personalization for this
+ARA-M instance; the second is the exact STORE DATA command above:
+
+```text
+80E620000F000009A00000015141434C00000000
+80E2900015F013E211E10A4F06F0000000AA01C100E303D00101
+```
+
+`AraMJCApplet` implements `org.globalplatform.Application`, so the Security
+Domain delivers the second command data to `processData(...)` only after the
+authenticated `INSTALL [for personalization]` step succeeds.
+
 Sending the same reference with `D0 01 00` replaces the APDU rule with
 `NEVER`:
 
@@ -159,6 +174,7 @@ From `jc/`:
 The jCardSim suite proves:
 
 - SELECT returns `9000`;
+- the applet implements the Security Domain personalization contract;
 - unprovisioned GET DATA [all] returns `FF4000`;
 - STORE DATA provisions a permissive rule;
 - GET DATA [all] returns the exact `FF40`/`E2` TLV;
@@ -199,10 +215,15 @@ Or drive Ant directly:
 
 ```bash
 cd jc
+./gradlew --no-daemon prepareCapDependencies
 JDK11=/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home
 JAVA_HOME="$JDK11" PATH="$JDK11/bin:$PATH" \
   JC_CAP_TOOLCHAIN=/abs/path/to/cap-toolchain \
-  ant -f cap-build.xml -Djckit.name=jc304_kit -Dcap.suffix=-jc304 dist
+  ant -f cap-build.xml \
+    -Djckit.name=jc304_kit \
+    -Dcap.suffix=-jc304 \
+    -Dglobalplatform.javacard.jar="$PWD/build/cap-dependencies/javacard-1.1.jar" \
+    dist
 ```
 
 Outputs (created fresh under the gitignored `artifacts/caps/`):
@@ -218,8 +239,9 @@ Java Card converter and CAP verifier.
 ## Tools
 
 - Gradle wrapper (`jc/gradlew`) — compiles the applet against jCardSim and runs
-  JUnit 5 tests. Run `./gradlew clean test --no-daemon` from `jc/`; output goes
-  to `jc/build/`.
+  JUnit 5 tests, and resolves the GlobalPlatform Java Card API used by the CAP
+  converter. Run `./gradlew clean test --no-daemon` from `jc/`; output goes to
+  `jc/build/`.
 - jCardSim (`com.klinec:jcardsim:3.0.5.9`) — simulator used by
   `AraMAppletTest`; Gradle resolves it from Maven Central.
 - Ant + ant-javacard (`jc/cap-build.xml`) — converts and verifies a real Java
