@@ -1,0 +1,49 @@
+plugins {
+    id 'java'
+    id 'jacoco'
+}
+
+group = 'works.relux'
+version = '0.1.0'
+
+java {
+    // Java Card Classic targets Java 8 bytecode.
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+tasks.withType(JavaCompile).configureEach {
+    // Casts keep JCVM array operands visibly short-typed. RandomData's JC 3.0.4
+    // API is deprecated only by the newer jCardSim compile stubs.
+    options.compilerArgs += ['-Xlint:all,-options,-cast,-deprecation']
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // jCardSim supplies the Java Card API stubs to main and simulates the applet in tests.
+    implementation 'com.klinec:jcardsim:3.0.5.9'
+
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    jvmArgs '--add-modules', 'java.smartcardio'
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        showStandardStreams = false
+    }
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}

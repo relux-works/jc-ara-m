@@ -1,0 +1,46 @@
+<project name="ara-m-cap-build" default="dist">
+    <property name="root.dir" location="."/>
+    <!--
+      Java Card CAP toolchain (ant-javacard.jar + Oracle JC SDK kit) is an
+      external prerequisite of this standalone product. Resolve it, in order:
+        1. -Dtoolchain.dir=/abs/path  (highest precedence, Ant first-set-wins)
+        2. JC_CAP_TOOLCHAIN env var
+        3. ./.toolchain  (documented local default; see README)
+    -->
+    <property environment="env"/>
+    <condition property="toolchain.dir" value="${env.JC_CAP_TOOLCHAIN}">
+        <isset property="env.JC_CAP_TOOLCHAIN"/>
+    </condition>
+    <property name="toolchain.dir" location="${root.dir}/.toolchain"/>
+    <property name="ant.javacard.jar" location="${toolchain.dir}/ant-javacard.jar"/>
+    <property name="jckit.name" value="jc320v25.1_kit"/>
+    <property name="jckit.dir" location="${toolchain.dir}/oracle_javacard_sdks/${jckit.name}"/>
+    <property name="cap.suffix" value=""/>
+
+    <property name="caps.dir" location="${root.dir}/artifacts/caps"/>
+    <property name="ara.m.sources" location="${root.dir}/src/main/java"/>
+    <property name="ara.m.version" value="0.1"/>
+
+    <taskdef name="javacard" classname="pro.javacard.ant.JavaCard" classpath="${ant.javacard.jar}"/>
+
+    <target name="prepare">
+        <mkdir dir="${caps.dir}"/>
+    </target>
+
+    <target name="ara-m-cap" depends="prepare">
+        <javacard>
+            <cap jckit="${jckit.dir}"
+                 sources="${ara.m.sources}"
+                 package="works.relux.jcaram"
+                 aid="A00000015141434C"
+                 version="${ara.m.version}"
+                 ints="false"
+                 output="${caps.dir}/jc-ara-m-0.1${cap.suffix}.cap"
+                 jca="${caps.dir}/jc-ara-m-0.1${cap.suffix}.jca">
+                <applet class="works.relux.jcaram.AraMJCApplet" aid="A00000015141434C00"/>
+            </cap>
+        </javacard>
+    </target>
+
+    <target name="dist" depends="ara-m-cap"/>
+</project>
