@@ -3,20 +3,28 @@ package works.relux.jcaram;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.licel.jcardsim.smartcardio.CardSimulator;
 import com.licel.jcardsim.utils.AIDUtil;
+import javacard.framework.APDU;
 import javacard.framework.AID;
+import javacard.framework.Applet;
+import javacard.framework.ISO7816;
+import javacard.framework.ISOException;
+import javacard.framework.JCSystem;
 import java.io.ByteArrayOutputStream;
 import javax.smartcardio.CommandAPDU;
 import javax.smartcardio.ResponseAPDU;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.globalplatform.Application;
 
 final class AraMAppletTest {
 
     private static final String ARA_M_AID_HEX = "A00000015141434C00";
     private static final byte[] ARA_M_AID = hex(ARA_M_AID_HEX);
+    private static final String PERSONALIZATION_HARNESS_AID_HEX = "F0000000AE01";
 
     private static final byte[] PERMISSIVE_ALLOW_REF_AR_DO =
             hex("E211E10A4F06F0000000AA01C100E303D00101");
@@ -48,6 +56,26 @@ final class AraMAppletTest {
 
         assertEquals(0x9000, response.getSW());
         assertEquals(0, response.getData().length);
+    }
+
+    @Test
+    void implementsSecurityDomainPersonalizationContract() {
+        assertTrue(Application.class.isAssignableFrom(AraMJCApplet.class));
+    }
+
+    @Test
+    void personalizationReadsSecurityDomainApduBufferAndReusesTransaction() {
+        AID harnessAid = AIDUtil.create(PERSONALIZATION_HARNESS_AID_HEX);
+        simulator.installApplet(harnessAid, PersonalizationHarnessApplet.class);
+        simulator.selectApplet(harnessAid);
+
+        ResponseAPDU storeResponse = store(PERMISSIVE_ALLOW_REF_AR_DO);
+        ResponseAPDU getResponse = getData(0xFF, 0x40);
+
+        assertEquals(0x9000, storeResponse.getSW());
+        assertEquals(0x9000, getResponse.getSW());
+        assertArrayEquals(
+                concat(hex("FF4013"), PERMISSIVE_ALLOW_REF_AR_DO), getResponse.getData());
     }
 
     @Test
@@ -157,5 +185,45 @@ final class AraMAppletTest {
                                     | Character.digit(value.charAt(index + 1), 16));
         }
         return result;
+    }
+
+    public static final class PersonalizationHarnessApplet extends Applet {
+
+        private final AraMApplet logic;
+
+        private PersonalizationHarnessApplet() {
+            logic = new AraMApplet();
+            register();
+        }
+
+        public static void install(byte[] data, short offset, byte length) {
+            new PersonalizationHarnessApplet();
+        }
+
+        @Override
+        public void process(APDU apdu) {
+            if (selectingApplet()) {
+                return;
+            }
+
+            byte[] buffer = apdu.getBuffer();
+            if (buffer[ISO7816.OFFSET_INS] == (byte) 0xE2) {
+                short received = apdu.setIncomingAndReceive();
+                short length = apdu.getIncomingLength();
+                if (received != length) {
+                    ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+                }
+                JCSystem.beginTransaction();
+                AraMJCApplet.storePersonalizationData(logic, buffer);
+                JCSystem.commitTransaction();
+                return;
+            }
+            if (buffer[ISO7816.OFFSET_INS] == (byte) 0xCA) {
+                short length = logic.writeAllRules(buffer, (short) 0);
+                apdu.setOutgoingAndSend((short) 0, length);
+                return;
+            }
+            ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
+        }
     }
 }

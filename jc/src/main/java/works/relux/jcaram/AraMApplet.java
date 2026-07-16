@@ -39,7 +39,7 @@ final class AraMApplet {
         refreshTag = new byte[REFRESH_TAG_LENGTH];
         nextRefreshTag =
                 JCSystem.makeTransientByteArray(
-                        REFRESH_TAG_LENGTH, JCSystem.CLEAR_ON_DESELECT);
+                        REFRESH_TAG_LENGTH, JCSystem.CLEAR_ON_RESET);
         random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
         random.generateData(refreshTag, (short) 0, REFRESH_TAG_LENGTH);
     }
@@ -103,7 +103,10 @@ final class AraMApplet {
         validateRefArDo(input, refArDoValueOffset, refArDoEnd);
         prepareNextRefreshTag();
 
-        JCSystem.beginTransaction();
+        boolean ownsTransaction = JCSystem.getTransactionDepth() == (byte) 0;
+        if (ownsTransaction) {
+            JCSystem.beginTransaction();
+        }
         Util.arrayCopy(
                 input,
                 refArDoOffset,
@@ -117,7 +120,9 @@ final class AraMApplet {
                 refreshTag,
                 (short) 0,
                 REFRESH_TAG_LENGTH);
-        JCSystem.commitTransaction();
+        if (ownsTransaction) {
+            JCSystem.commitTransaction();
+        }
     }
 
     private static void validateRefArDo(byte[] input, short offset, short end) {

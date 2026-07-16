@@ -6,9 +6,10 @@ import javacard.framework.ISO7816;
 import javacard.framework.ISOException;
 import javacard.framework.JCSystem;
 import javacard.framework.Util;
+import org.globalplatform.Application;
 
 /** Java Card APDU adapter for the minimal ARA-M implementation. */
-public final class AraMJCApplet extends Applet {
+public final class AraMJCApplet extends Applet implements Application {
 
     private static final byte INS_GET_DATA = (byte) 0xCA;
     private static final byte INS_STORE_DATA = (byte) 0xE2;
@@ -61,6 +62,25 @@ public final class AraMJCApplet extends Applet {
             return;
         }
         ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
+    }
+
+    /** Receives authenticated STORE DATA from the Security Domain personalization flow. */
+    @Override
+    public void processData(byte[] data, short offset, short length) {
+        storePersonalizationData(logic, data);
+    }
+
+    static void storePersonalizationData(AraMApplet logic, byte[] apduBuffer) {
+        if (apduBuffer[ISO7816.OFFSET_P1] != P1_STORE_LAST_BER_TLV_BLOCK
+                || apduBuffer[ISO7816.OFFSET_P2] != P2_STORE_FIRST_BLOCK) {
+            ISOException.throwIt(ISO7816.SW_INCORRECT_P1P2);
+        }
+        byte encodedLength = apduBuffer[ISO7816.OFFSET_LC];
+        if (encodedLength < (byte) 0) {
+            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+        short dataLength = (short) encodedLength;
+        logic.store(apduBuffer, ISO7816.OFFSET_CDATA, dataLength);
     }
 
     private void processGetData(APDU apdu, byte[] buffer) {
