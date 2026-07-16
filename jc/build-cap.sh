@@ -50,8 +50,19 @@ if [ ! -x "$JDK11/bin/javac" ]; then
   exit 1
 fi
 
+./gradlew --no-daemon prepareCapDependencies
+GLOBALPLATFORM_JAVACARD_JAR="$PWD/build/cap-dependencies/javacard-1.1.jar"
+if [ ! -f "$GLOBALPLATFORM_JAVACARD_JAR" ]; then
+  echo "ERROR: GlobalPlatform Java Card API jar was not resolved at '$GLOBALPLATFORM_JAVACARD_JAR'." >&2
+  exit 1
+fi
+
 echo "jckit=$JCKIT suffix='$SUFFIX' toolchain=${JC_CAP_TOOLCHAIN:-./.toolchain} jdk11=$JDK11"
 JAVA_HOME="$JDK11" PATH="$JDK11/bin:$PATH" \
-  ant -f cap-build.xml -Djckit.name="$JCKIT" -Dcap.suffix="$SUFFIX" dist
+  ant -f cap-build.xml \
+    -Djckit.name="$JCKIT" \
+    -Dcap.suffix="$SUFFIX" \
+    -Dglobalplatform.javacard.jar="$GLOBALPLATFORM_JAVACARD_JAR" \
+    dist
 
 echo "built: artifacts/caps/jc-ara-m-0.1${SUFFIX}.cap"

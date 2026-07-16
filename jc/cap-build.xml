@@ -16,6 +16,8 @@
     <property name="jckit.name" value="jc320v25.1_kit"/>
     <property name="jckit.dir" location="${toolchain.dir}/oracle_javacard_sdks/${jckit.name}"/>
     <property name="cap.suffix" value=""/>
+    <property name="globalplatform.javacard.jar"
+              location="${root.dir}/build/cap-dependencies/javacard-1.1.jar"/>
 
     <property name="caps.dir" location="${root.dir}/artifacts/caps"/>
     <property name="ara.m.sources" location="${root.dir}/src/main/java"/>
@@ -36,8 +38,9 @@
                  version="${ara.m.version}"
                  ints="false"
                  output="${caps.dir}/jc-ara-m-0.1${cap.suffix}.cap"
-                 jca="${caps.dir}/jc-ara-m-0.1${cap.suffix}.jca">
+                jca="${caps.dir}/jc-ara-m-0.1${cap.suffix}.jca">
                 <applet class="works.relux.jcaram.AraMJCApplet" aid="A00000015141434C00"/>
+                <import jar="${globalplatform.javacard.jar}"/>
             </cap>
         </javacard>
     </target>
