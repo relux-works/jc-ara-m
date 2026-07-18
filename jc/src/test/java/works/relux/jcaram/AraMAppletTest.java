@@ -3,14 +3,13 @@ package works.relux.jcaram;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.licel.jcardsim.smartcardio.CardSimulator;
 import com.licel.jcardsim.utils.AIDUtil;
-import javacard.framework.APDU;
 import javacard.framework.AID;
 import javacard.framework.Applet;
-import javacard.framework.ISO7816;
 import javacard.framework.ISOException;
 import javacard.framework.JCSystem;
 import java.io.ByteArrayOutputStream;
@@ -24,7 +23,6 @@ final class AraMAppletTest {
 
     private static final String ARA_M_AID_HEX = "A00000015141434C00";
     private static final byte[] ARA_M_AID = hex(ARA_M_AID_HEX);
-    private static final String PERSONALIZATION_HARNESS_AID_HEX = "F0000000AE01";
 
     private static final byte[] PERMISSIVE_ALLOW_REF_AR_DO =
             hex("E211E10A4F06F0000000AA01C100E303D00101");
@@ -38,15 +36,17 @@ final class AraMAppletTest {
                             + "C114000102030405060708090A0B0C0D0E0F10111213"
                             + "E303D00101");
 
-    private CardSimulator simulator;
+    private ExposedCardSimulator simulator;
     private AID appletAid;
+    private Application application;
 
     @BeforeEach
     void setUp() {
-        simulator = new CardSimulator();
+        simulator = new ExposedCardSimulator();
         appletAid = AIDUtil.create(ARA_M_AID_HEX);
         simulator.installApplet(appletAid, AraMJCApplet.class);
         simulator.selectApplet(appletAid);
+        application = simulator.application(appletAid);
     }
 
     @Test
@@ -64,15 +64,28 @@ final class AraMAppletTest {
     }
 
     @Test
-    void personalizationReadsSecurityDomainApduBufferAndReusesTransaction() {
-        AID harnessAid = AIDUtil.create(PERSONALIZATION_HARNESS_AID_HEX);
-        simulator.installApplet(harnessAid, PersonalizationHarnessApplet.class);
-        simulator.selectApplet(harnessAid);
+    void rawStoreDataIsRejectedWithoutMutatingRuleOrRefreshTag() {
+        byte[] rulesBefore = getData(0xFF, 0x40).getData();
+        byte[] refreshBefore = getData(0xDF, 0x20).getData();
 
-        ResponseAPDU storeResponse = store(PERMISSIVE_ALLOW_REF_AR_DO);
+        ResponseAPDU response = rawStore(PERMISSIVE_ALLOW_REF_AR_DO);
+
+        assertEquals(0x6982, response.getSW());
+        assertEquals(0, response.getData().length);
+        assertArrayEquals(rulesBefore, getData(0xFF, 0x40).getData());
+        assertArrayEquals(refreshBefore, getData(0xDF, 0x20).getData());
+    }
+
+    @Test
+    void securityDomainPersonalizationCallbackStoresRuleAndReusesTransaction() {
+        JCSystem.beginTransaction();
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+        byte transactionDepth = JCSystem.getTransactionDepth();
+        JCSystem.commitTransaction();
+        assertEquals(1, transactionDepth);
+
         ResponseAPDU getResponse = getData(0xFF, 0x40);
 
-        assertEquals(0x9000, storeResponse.getSW());
         assertEquals(0x9000, getResponse.getSW());
         assertArrayEquals(
                 concat(hex("FF4013"), PERMISSIVE_ALLOW_REF_AR_DO), getResponse.getData());
@@ -87,21 +100,19 @@ final class AraMAppletTest {
     }
 
     @Test
-    void storeDataProvisionsPermissiveRuleReturnedByGetDataAll() {
-        ResponseAPDU storeResponse = store(PERMISSIVE_ALLOW_REF_AR_DO);
+    void personalizationProvisionsPermissiveRuleReturnedByGetDataAll() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
         ResponseAPDU getResponse = getData(0xFF, 0x40);
 
-        assertEquals(0x9000, storeResponse.getSW());
-        assertEquals(0, storeResponse.getData().length);
         assertEquals(0x9000, getResponse.getSW());
         assertArrayEquals(
                 concat(hex("FF4013"), PERMISSIVE_ALLOW_REF_AR_DO), getResponse.getData());
     }
 
     @Test
-    void storeDataReplacesRuleWithTheSameReference() {
-        assertEquals(0x9000, store(PERMISSIVE_ALLOW_REF_AR_DO).getSW());
-        assertEquals(0x9000, store(PERMISSIVE_DENY_REF_AR_DO).getSW());
+    void personalizationReplacesRuleWithTheSameReference() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+        personalize(PERMISSIVE_DENY_REF_AR_DO);
 
         ResponseAPDU response = getData(0xFF, 0x40);
 
@@ -111,7 +122,7 @@ final class AraMAppletTest {
     }
 
     @Test
-    void refreshTagIsWellFormedAndChangesAfterStoreData() {
+    void refreshTagIsWellFormedAndChangesAfterPersonalization() {
         ResponseAPDU before = getData(0xDF, 0x20);
         assertEquals(0x9000, before.getSW());
         assertEquals(11, before.getData().length);
@@ -119,38 +130,38 @@ final class AraMAppletTest {
         assertEquals((byte) 0x20, before.getData()[1]);
         assertEquals((byte) 0x08, before.getData()[2]);
 
-        assertEquals(0x9000, store(PERMISSIVE_ALLOW_REF_AR_DO).getSW());
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
         ResponseAPDU after = getData(0xDF, 0x20);
 
         assertEquals(0x9000, after.getSW());
         assertEquals(11, after.getData().length);
         assertFalse(
                 java.util.Arrays.equals(before.getData(), after.getData()),
-                "STORE DATA must update the ARA-M refresh tag");
+                "Accepted personalization must update the ARA-M refresh tag");
     }
 
     @Test
-    void storeDataAcceptsFutureSha1CertificateBoundRuleShape() {
-        ResponseAPDU storeResponse = store(CERT_BOUND_ALLOW_REF_AR_DO);
+    void personalizationAcceptsFutureSha1CertificateBoundRuleShape() {
+        personalize(CERT_BOUND_ALLOW_REF_AR_DO);
         ResponseAPDU getResponse = getData(0xFF, 0x40);
 
-        assertEquals(0x9000, storeResponse.getSW());
         assertEquals(0x9000, getResponse.getSW());
         assertArrayEquals(
                 concat(hex("FF4027"), CERT_BOUND_ALLOW_REF_AR_DO), getResponse.getData());
     }
 
     @Test
-    void malformedStoreDataDoesNotReplaceExistingRule() {
-        assertEquals(0x9000, store(PERMISSIVE_ALLOW_REF_AR_DO).getSW());
+    void malformedPersonalizationDoesNotReplaceExistingRule() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
         byte[] refreshBeforeMalformedStore = getData(0xDF, 0x20).getData();
 
         byte[] missingArDo = hex("E20CE10A4F06F0000000AA01C100");
-        ResponseAPDU rejected = store(missingArDo);
+        ISOException rejected =
+                assertThrows(ISOException.class, () -> personalize(missingArDo));
         ResponseAPDU getResponse = getData(0xFF, 0x40);
         ResponseAPDU refreshAfterMalformedStore = getData(0xDF, 0x20);
 
-        assertEquals(0x6A80, rejected.getSW());
+        assertEquals(0x6A80, rejected.getReason() & 0xFFFF);
         assertArrayEquals(
                 concat(hex("FF4013"), PERMISSIVE_ALLOW_REF_AR_DO), getResponse.getData());
         assertArrayEquals(
@@ -163,10 +174,21 @@ final class AraMAppletTest {
         return simulator.transmitCommand(new CommandAPDU(0x80, 0xCA, p1, p2, 256));
     }
 
-    private ResponseAPDU store(byte[] refArDo) {
-        byte[] commandStoreRefArDo = concat(new byte[] {(byte) 0xF0, (byte) refArDo.length}, refArDo);
-        return simulator.transmitCommand(
-                new CommandAPDU(0x80, 0xE2, 0x90, 0x00, commandStoreRefArDo));
+    private ResponseAPDU rawStore(byte[] refArDo) {
+        return simulator.transmitCommand(new CommandAPDU(storeCommand(refArDo)));
+    }
+
+    private void personalize(byte[] refArDo) {
+        byte[] command = storeCommand(refArDo);
+        application.processData(command, (short) 0, (short) command.length);
+    }
+
+    private static byte[] storeCommand(byte[] refArDo) {
+        byte[] commandStoreRefArDo =
+                concat(new byte[] {(byte) 0xF0, (byte) refArDo.length}, refArDo);
+        return concat(
+                hex("80E29000"),
+                concat(new byte[] {(byte) commandStoreRefArDo.length}, commandStoreRefArDo));
     }
 
     private static byte[] concat(byte[] left, byte[] right) {
@@ -187,43 +209,11 @@ final class AraMAppletTest {
         return result;
     }
 
-    public static final class PersonalizationHarnessApplet extends Applet {
+    private static final class ExposedCardSimulator extends CardSimulator {
 
-        private final AraMApplet logic;
-
-        private PersonalizationHarnessApplet() {
-            logic = new AraMApplet();
-            register();
-        }
-
-        public static void install(byte[] data, short offset, byte length) {
-            new PersonalizationHarnessApplet();
-        }
-
-        @Override
-        public void process(APDU apdu) {
-            if (selectingApplet()) {
-                return;
-            }
-
-            byte[] buffer = apdu.getBuffer();
-            if (buffer[ISO7816.OFFSET_INS] == (byte) 0xE2) {
-                short received = apdu.setIncomingAndReceive();
-                short length = apdu.getIncomingLength();
-                if (received != length) {
-                    ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
-                }
-                JCSystem.beginTransaction();
-                AraMJCApplet.storePersonalizationData(logic, buffer);
-                JCSystem.commitTransaction();
-                return;
-            }
-            if (buffer[ISO7816.OFFSET_INS] == (byte) 0xCA) {
-                short length = logic.writeAllRules(buffer, (short) 0);
-                apdu.setOutgoingAndSend((short) 0, length);
-                return;
-            }
-            ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
+        Application application(AID aid) {
+            Applet applet = runtime.lookupApplet(aid).getApplet();
+            return (Application) applet;
         }
     }
 }

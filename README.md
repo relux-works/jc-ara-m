@@ -7,8 +7,8 @@ to the phase-1/phase-2 access-control flow it was built for:
 
 - store one validated `REF-AR-DO`;
 - return that rule to Android's `AccessControlEnforcer`;
-- replace the slot with a later `STORE DATA`;
-- receive authenticated personalization data through the standard
+- replace the slot only through authenticated Security Domain personalization;
+- receive personalization data through the standard
   `org.globalplatform.Application` contract;
 - support empty, SHA-1, and SHA-256 `DeviceAppID-REF-DO` values without
   changing the persistent representation.
@@ -47,11 +47,13 @@ rules.
 | SELECT ARA-M | `00 A4 04 00 09 A00000015141434C00` | empty |
 | GET DATA [refresh tag] | `80 CA DF 20 00` | `DF 20 08 <8-byte tag>` |
 | GET DATA [all] | `80 CA FF 40 00` | `FF 40 <len> <zero or one E2>` |
-| STORE DATA, one complete BER-TLV block | `80 E2 90 00 <Lc> <F0 command DO>` | empty |
 
-`P1=90` on `STORE DATA` means the last block is present and the command data is
-BER-TLV formatted. `P2=00` is block zero. This implementation accepts one
-complete short-APDU block; the supported rule forms are far below that limit.
+Raw `STORE DATA` is not a runtime ARA-M command. Sending
+`80 E2 90 00 <Lc> <F0 command DO>` directly to the selected applet is rejected
+with `6982` (`Security status not satisfied`) and cannot change either the rule
+or refresh tag. Rule mutation is available only when an authenticated Security
+Domain personalization flow delivers the same command buffer through
+`Application.processData(...)`.
 
 The implementation accepts the GlobalPlatform proprietary CLA ranges
 `80`-`8F`, `C0`-`CF`, and `E0`-`EF`. Android currently uses `80`.
@@ -96,10 +98,14 @@ FF 40 13 E2 11 E1 0A 4F 06 F0000000AA01 C1 00 E3 03 D0 01 01
 The `DF20` refresh tag is eight bytes generated at installation and changed
 atomically with every accepted rule replacement.
 
-## Exact STORE DATA provisioning APDUs
+## Authenticated STORE DATA provisioning APDUs
 
 `STORE DATA` carries one `Command-Store-REF-AR-DO` (`F0`) around the `E2`
-rule. Provision the phase-1 permissive HelloApplet rule with:
+rule. `P1=90` means the last BER-TLV-formatted block is present, and `P2=00` is
+block zero. This implementation accepts one complete short-APDU block; the
+supported rule forms are far below that limit.
+
+The command buffer for the phase-1 permissive HelloApplet rule is:
 
 ```text
 80 E2 90 00 15
@@ -118,9 +124,9 @@ As one hex string:
 80E2900015F013E211E10A4F06F0000000AA01C100E303D00101
 ```
 
-For authenticated Security Domain provisioning, send these two APDUs in one
-`gp-t0-helper secure-apdu` session. The first enters personalization for this
-ARA-M instance; the second is the exact STORE DATA command above:
+Send these two APDUs in one authenticated `gp-t0-helper secure-apdu` Security
+Domain session. The first enters personalization for this ARA-M instance; the
+second is the exact STORE DATA command above:
 
 ```text
 80E620000F000009A00000015141434C00000000
@@ -129,7 +135,9 @@ ARA-M instance; the second is the exact STORE DATA command above:
 
 `AraMJCApplet` implements `org.globalplatform.Application`, so the Security
 Domain delivers the second command data to `processData(...)` only after the
-authenticated `INSTALL [for personalization]` step succeeds.
+authenticated `INSTALL [for personalization]` step succeeds. Do not select the
+ARA-M instance and send the STORE DATA command directly: the applet's raw ISO
+dispatch rejects `INS E2` with `6982` by design.
 
 Sending the same reference with `D0 01 00` replaces the APDU rule with
 `NEVER`:
@@ -155,9 +163,10 @@ The phase-2 SHA-1 certificate-bound shape replaces `C1 00` with
 For SHA-256, use `C1 20 <32-byte hash>`; the corresponding enclosing lengths
 are `E1 2A`, `E2 31`, `F0 33`, and APDU `Lc=35`.
 
-The applet validates the complete nested TLV before mutating persistent state.
-Malformed data returns `6A80` and leaves the prior rule and refresh tag
-unchanged. Any accepted `STORE DATA` replaces the project's single rule slot.
+Within the authenticated personalization callback, the applet validates the
+complete nested TLV before mutating persistent state. Malformed data returns
+`6A80` and leaves the prior rule and refresh tag unchanged. Any accepted
+callback replaces the project's single rule slot.
 
 In a hardware flow, send provisioning through an authenticated GlobalPlatform
 administrative channel. The applet intentionally does not invent a second
@@ -175,13 +184,15 @@ The jCardSim suite proves:
 
 - SELECT returns `9000`;
 - the applet implements the Security Domain personalization contract;
+- raw `INS E2` is rejected with `6982` without changing rules or refresh tag;
+- the actual `Application.processData(...)` callback accepts personalization;
 - unprovisioned GET DATA [all] returns `FF4000`;
-- STORE DATA provisions a permissive rule;
+- authenticated personalization provisions a permissive rule;
 - GET DATA [all] returns the exact `FF40`/`E2` TLV;
-- a second STORE DATA replaces the same reference;
+- a second authenticated personalization replaces the same reference;
 - GET DATA [refresh tag] is well formed and changes after provisioning;
 - a future 20-byte certificate-bound `C1` shape is accepted;
-- malformed STORE DATA does not clobber the existing rule.
+- malformed personalization does not clobber the existing rule.
 
 JUnit XML and HTML reports are written under `jc/build/test-results/test/` and
 `jc/build/reports/tests/test/`.
