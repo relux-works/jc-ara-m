@@ -17,3 +17,7 @@ artifacts/
 
 # Task-local scratch
 .temp/
+
+# Agent harness
+LOGBOOK.md
+.planning/
