@@ -472,14 +472,45 @@ laundered into a clean-looking `6A80`. Mutation runs confirmed this: deleting th
 survived the entire padded-only corpus and are caught immediately once the tight
 shape is included.
 
-`shapesRejectedByDesignAreStillRejected` closes the complementary blind spot.
-Every invariant above constrains how the applet *rejects*; none of them requires
-that anything be rejected at all, so a parser that silently grew more permissive
-would sail through the corpus (the accepted branch just resets the baseline and
-moves on). That test asserts the 16 SEAC-plausible shapes the applet refuses **by
-design** — unimplemented members, wrong member order, out-of-range lengths,
-long-form lengths, trailing bytes — are still refused. A shape that becomes
-legitimately supported must move out of that list rather than be quietly accepted.
+`shapesRejectedByDesignAreStillRejectedAtTheRuleTheyName` closes the
+complementary blind spot. Every invariant above constrains how the applet
+*rejects*; none of them requires that anything be rejected at all, so a parser
+that silently grew more permissive would sail through the corpus (the accepted
+branch just resets the baseline and moves on). That test asserts the 17
+SEAC-plausible shapes the applet refuses **by design** — unimplemented members,
+wrong member order, out-of-range lengths, long-form lengths, trailing bytes, a
+third AR-DO member — are still refused. A shape that becomes legitimately
+supported must move out of that list rather than be quietly accepted.
+
+Asserting *that* a shape is rejected is not enough, and the gap was a real
+defect rather than a theoretical one: three entries of the first version of the
+list declared BER lengths that disagreed with their own content (`E2` claiming 26
+bytes over 25, `E3` claiming 15 over 12), so `upsert`'s outer `checkedEnd` threw
+them out before the member rule named in the entry's comment was ever consulted.
+Each passed for the wrong reason, and each would have kept passing with the rule
+it claimed to guard deleted from the applet — the same false comfort the harness
+exists to remove. Three independent facts are therefore pinned per entry, any one
+of which falsifies that failure mode on its own:
+
+- **the rejection site** — the `AraMApplet` frames on the stack at the refusal,
+  as `requireTag<-validateArDo<-upsert<-store`, together with the exact status
+  word. A shape refused upstream reports `checkedEnd<-upsert<-store` and fails;
+- **its own structure** — `byDesignRejectedShapesCarryOnlyTheStructuralDefectTheyName`
+  walks each encoding as BER with a checker independent of the applet, and every
+  declared length must span exactly its content. The two entries whose named
+  defect *is* the length encoding pin the exact disagreement instead of being
+  waved through;
+- **attribution** — `byDesignRejectedShapesAreAcceptedOnceTheirNamedPropertyIsRepaired`
+  stores a repair that touches only the named property and requires it to be
+  accepted, so the refusal is caused by that property and not by a second flaw
+  living in the same method.
+
+`theByDesignRejectionInventoryIsPinnedAndCoversEveryRejectionSite` pins the entry
+count and the set of rejection sites covered. That count is deliberately **not** a
+completeness claim — the rejection surface is every shape the grammar refuses,
+which is unbounded and unenumerated here. What it buys is that dropping an entry
+to turn a red build green has to be a visible edit, and that no rejection site the
+parser has is left without a by-design witness.
 
 A fourth invariant is asserted by the pass that runs the corpus inside a
 transaction the applet does not own: it must never commit or abort that
@@ -550,15 +581,22 @@ a parser that gradually stops rejecting things would stay green.
 `theCorpusAcceptRejectDecisionMatchesItsPinnedGoldenVector` closes that gap by
 making the corpus's own verdict the assertion: every execution contributes
 `A<capacity>` or `R<statusWord>` to a vector that is counted, histogrammed and
-SHA-256 digested, and the summary is pinned in the test.
+SHA-256 digested, and the summary is pinned in the test. The same verdicts are
+pinned *per case* in
+`jc/src/test/resources/works/relux/jcaram/install-fuzz-golden-decisions.txt`.
 
 **When it fails, it is not a flake.** Either the parser changed its mind about an
-input — decide whether that is intended and, if so, re-pin
-`GOLDEN_DECISION_SUMMARY` in the same commit as the parser change — or the corpus
-construction changed, in which case re-pin and say so. The assertion message
-prints the observed summary ready to paste. Never re-pin to turn red green
-without naming which inputs moved and why. Under either soak property the test
-skips rather than fails, since it is pinned to the default corpus.
+input — decide whether that is intended and, if so, re-pin in the same commit as
+the parser change — or the corpus construction changed, in which case re-pin and
+say so. Never re-pin to turn red green without naming which inputs moved and why,
+which is exactly why a digest alone is not the failure message: a hash can only
+say *that* something moved, leaving "identify which inputs moved" as an unaided
+bisect and, in practice, an invitation to re-pin and move on. So the failure names
+the first twelve cases that changed their mind, with the label that reproduces
+each, and writes the full observed vector to
+`build/reports/install-fuzz-observed-decisions.txt` ready to copy over the
+resource. Under either soak property the test skips rather than fails, since it is
+pinned to the default corpus.
 
 The committed personalization run is ~2325 cases — ~4650 executions across the
 two buffer shapes — and both harnesses together finish in well under a second. To

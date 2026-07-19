@@ -14,9 +14,17 @@ import javacard.framework.AID;
 import javacard.framework.Applet;
 import javacard.framework.ISOException;
 import javacard.framework.SystemException;
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -91,6 +99,13 @@ final class AraMInstallParameterFuzzTest {
                     + " capacities={1=46, 16=152, 17=42, 32=2, 48=32, 64=132}"
                     + " statusWords={6A80=438}"
                     + " digest=421000f541c9381603223470a295c4699c13012b30adc3ab2590cbb071acf0cf";
+
+    /** The same verdict, per case, so a mismatch can name which inputs moved rather than a hash. */
+    private static final String GOLDEN_DECISIONS_RESOURCE =
+            "works/relux/jcaram/install-fuzz-golden-decisions.txt";
+
+    /** Cap on the named differences in a failure message. */
+    private static final int REPORTED_DECISION_DIFFERENCES = 12;
 
     private static final String ARA_M_AID_HEX = "A00000015141434C00";
     private static final byte[] ARA_M_AID = hex("A00000015141434C00");
@@ -402,6 +417,16 @@ final class AraMInstallParameterFuzzTest {
      *
      * <p>Only meaningful for the committed corpus, so a soak run under {@code -Param.fuzz.seed} or
      * {@code -Param.fuzz.mutants} skips it rather than failing on a corpus it was never pinned to.
+     *
+     * <p><b>Diagnostics.</b> A summary line and a digest can only say <em>that</em> something moved,
+     * which leaves "identify which inputs moved" as an unaided manual bisect against an opaque
+     * hash — in practice an invitation to re-pin the constant and move on, which is the one thing
+     * this test asks you not to do. So the per-execution verdicts are pinned too, in
+     * {@code {@value #GOLDEN_DECISIONS_RESOURCE}}, and the failure names the first
+     * {@value #REPORTED_DECISION_DIFFERENCES} cases that changed their mind, with the label that
+     * reproduces each one. The full observed vector is written to
+     * {@code build/reports/install-fuzz-observed-decisions.txt} ready to be copied over the
+     * resource once the movement is understood and intended.
      */
     @Test
     void theCorpusAcceptRejectDecisionMatchesItsPinnedGoldenVector() {
@@ -411,6 +436,7 @@ final class AraMInstallParameterFuzzTest {
 
         List<FuzzCase> corpus = buildCorpus();
         StringBuilder decisionVector = new StringBuilder();
+        List<String> decisions = new ArrayList<String>();
         TreeMap<Integer, Integer> capacities = new TreeMap<Integer, Integer>();
         TreeMap<Integer, Integer> statusWords = new TreeMap<Integer, Integer>();
         int accepted = 0;
@@ -424,19 +450,26 @@ final class AraMInstallParameterFuzzTest {
                                 ? PaddedInput.tight(fuzzCase.installData)
                                 : PaddedInput.wrap(fuzzCase.installData, fuzzCase.padOffset);
                 executions++;
+                String verdict;
                 try {
                     short capacity =
                             AraMJCApplet.resolveActiveRuleCapacity(
                                     input.buffer, input.offset, input.length);
                     accepted++;
                     increment(capacities, capacity);
-                    decisionVector.append('A').append(capacity).append(',');
+                    verdict = "A" + capacity;
                 } catch (ISOException refusal) {
                     int statusWord = refusal.getReason() & 0xFFFF;
                     rejected++;
                     increment(statusWords, statusWord);
-                    decisionVector.append('R').append(hexOf(statusWord)).append(',');
+                    verdict = "R" + hexOf(statusWord);
                 }
+                decisionVector.append(verdict).append(',');
+                decisions.add(
+                        verdict
+                                + " "
+                                + fuzzCase.label
+                                + (tightBuffer ? " [tight]" : " [padded]"));
             }
         }
 
@@ -456,12 +489,126 @@ final class AraMInstallParameterFuzzTest {
                         + " digest="
                         + sha256Of(decisionVector.toString());
 
+        String observedPath = writeObservedDecisions(decisions);
+        String differences =
+                describeDecisionDifferences(loadGoldenDecisions(), decisions, observedPath);
+        if (differences != null) {
+            fail(differences);
+        }
+
         assertEquals(
                 GOLDEN_DECISION_SUMMARY,
                 observed,
                 "The corpus changed its accept/reject verdict. Identify which inputs moved and why"
                         + " before re-pinning GOLDEN_DECISION_SUMMARY to:\n"
                         + observed);
+    }
+
+    /**
+     * Names the cases whose verdict moved, or {@code null} when the vectors agree.
+     *
+     * <p>Reports at most {@value #REPORTED_DECISION_DIFFERENCES} of them: enough to see whether one
+     * shape family moved or the corpus construction shifted wholesale, without burying that signal
+     * in hundreds of lines when every case shifts by one position.
+     */
+    private static String describeDecisionDifferences(
+            List<String> golden, List<String> observed, String observedPath) {
+        StringBuilder report = new StringBuilder();
+        int shared = Math.min(golden.size(), observed.size());
+        int differing = 0;
+        for (int index = 0; index < shared; index++) {
+            if (golden.get(index).equals(observed.get(index))) {
+                continue;
+            }
+            differing++;
+            if (differing <= REPORTED_DECISION_DIFFERENCES) {
+                report.append("\n  #")
+                        .append(index)
+                        .append("  was ")
+                        .append(golden.get(index))
+                        .append("\n      now ")
+                        .append(observed.get(index));
+            }
+        }
+        if (differing == 0 && golden.size() == observed.size()) {
+            return null;
+        }
+
+        StringBuilder message = new StringBuilder();
+        message.append("The corpus changed its accept/reject verdict per case.");
+        if (golden.size() != observed.size()) {
+            message.append("\nThe corpus itself changed shape: pinned ")
+                    .append(golden.size())
+                    .append(" executions, ran ")
+                    .append(observed.size())
+                    .append(". Verdict positions below are only comparable up to the shorter one.");
+        }
+        message.append("\n")
+                .append(differing)
+                .append(" of ")
+                .append(shared)
+                .append(" comparable executions moved");
+        if (differing > REPORTED_DECISION_DIFFERENCES) {
+            message.append("; first ").append(REPORTED_DECISION_DIFFERENCES).append(" shown");
+        }
+        message.append(':').append(report);
+        message.append("\n\nEach line is <verdict> <case label> <buffer shape>; the label"
+                        + " reproduces the case from the pinned seed. Decide whether the movement"
+                        + " is intended, then copy\n  ")
+                .append(observedPath)
+                .append("\nover src/test/resources/")
+                .append(GOLDEN_DECISIONS_RESOURCE)
+                .append(" in the same commit as the parser change.");
+        return message.toString();
+    }
+
+    private static List<String> loadGoldenDecisions() {
+        InputStream stream =
+                AraMInstallParameterFuzzTest.class
+                        .getClassLoader()
+                        .getResourceAsStream(GOLDEN_DECISIONS_RESOURCE);
+        if (stream == null) {
+            fail(
+                    "Missing pinned decision vector "
+                            + GOLDEN_DECISIONS_RESOURCE
+                            + ". The observed vector has been written to"
+                            + " build/reports/install-fuzz-observed-decisions.txt; copy it into"
+                            + " src/test/resources/ once you are satisfied it is correct.");
+        }
+        List<String> decisions = new ArrayList<String>();
+        BufferedReader reader =
+                new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
+        try {
+            String line = reader.readLine();
+            while (line != null) {
+                String trimmed = line.trim();
+                if (!trimmed.isEmpty() && !trimmed.startsWith("#")) {
+                    decisions.add(trimmed);
+                }
+                line = reader.readLine();
+            }
+        } catch (IOException failure) {
+            throw new UncheckedIOException(failure);
+        } finally {
+            try {
+                reader.close();
+            } catch (IOException ignored) {
+                // Nothing useful to do while closing a classpath resource.
+            }
+        }
+        return decisions;
+    }
+
+    /** Writes the observed vector next to the build reports so a re-pin is a copy, not a retype. */
+    private static String writeObservedDecisions(List<String> decisions) {
+        Path path = Paths.get("build", "reports", "install-fuzz-observed-decisions.txt");
+        try {
+            Files.createDirectories(path.getParent());
+            Files.write(path, decisions, StandardCharsets.UTF_8);
+        } catch (IOException failure) {
+            throw new UncheckedIOException(failure);
+        }
+        return path.toAbsolutePath().toString();
     }
 
     /**

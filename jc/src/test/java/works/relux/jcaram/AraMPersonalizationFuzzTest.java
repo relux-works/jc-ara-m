@@ -137,6 +137,169 @@ final class AraMPersonalizationFuzzTest {
         (byte) 0xDB, (byte) 0x00, (byte) 0xFF, (byte) 0x81
     };
 
+    /** Shorthand for {@link RejectedShape#structure}: the encoding's own BER arithmetic is sound. */
+    private static final String SELF_CONSISTENT = null;
+
+    /**
+     * The by-design rejection inventory: SEAC-plausible encodings this applet refuses on purpose,
+     * each carrying the evidence that it is refused for the reason its name gives.
+     *
+     * <p>Each entry pins three independent facts, and each one falsifies the vacuity failure mode
+     * on its own — see {@link RejectedShape} for why that mode is the thing to guard against.
+     * Ordering is load-bearing only in that {@link #buildCorpus()} derives seed indices from it.
+     */
+    private static final RejectedShape[] REJECTED_SHAPES = {
+        new RejectedShape(
+                "nfc-ar-do-instead-of-apdu-ar-do",
+                "NFC-AR-DO (D1) in the APDU-AR-DO's place: a real SEAC member we do not implement.",
+                "E211E10A4F06F0000000AA01C100E303D10101",
+                "E211E10A4F06F0000000AA01C100E303D00101",
+                SELF_CONSISTENT,
+                0x6A80,
+                "requireTag<-validateArDo<-upsert<-store"),
+        new RejectedShape(
+                "nfc-ar-do-after-apdu-ar-do",
+                "APDU-AR-DO plus NFC-AR-DO: the full two-member AR-DO from the SEAC spec.",
+                "E214E10A4F06F0000000AA01C100E306D00101D10101",
+                "E211E10A4F06F0000000AA01C100E303D00101",
+                SELF_CONSISTENT,
+                0x6A80,
+                "requireTag<-validateArDo<-upsert<-store"),
+        new RejectedShape(
+                "pkg-ref-do-in-the-ref-do",
+                "PKG-REF-DO (CA) inside the REF-DO: Android package-name reference, unsupported.",
+                "E218E1114F06F0000000AA01C100CA05636F6D2E78E303D00101",
+                "E211E10A4F06F0000000AA01C100E303D00101",
+                SELF_CONSISTENT,
+                0x6A80,
+                "validateRefDo<-upsert<-store"),
+        new RejectedShape(
+                "perm-ar-do-before-apdu-ar-do",
+                "PERM-AR-DO before APDU-AR-DO: right members, wrong SEAC order.",
+                "E21BE10A4F06F0000000AA01C100E30DDB080000000000000001D00101",
+                "E21BE10A4F06F0000000AA01C100E30DD00101DB080000000000000001",
+                SELF_CONSISTENT,
+                0x6A80,
+                "requireTag<-validateArDo<-upsert<-store"),
+        new RejectedShape(
+                "perm-ar-do-without-apdu-ar-do",
+                "AR-DO with no APDU-AR-DO at all, only the permission mask.",
+                "E218E10A4F06F0000000AA01C100E30ADB080000000000000001",
+                "E21BE10A4F06F0000000AA01C100E30DD00101DB080000000000000001",
+                SELF_CONSISTENT,
+                0x6A80,
+                "requireTag<-validateArDo<-upsert<-store"),
+        new RejectedShape(
+                "long-form-length-where-the-short-form-fits",
+                "Long-form BER length (81 xx) over a value the short form encodes: readLength"
+                        + " refuses any length octet with the 0x80 bit set.",
+                "E28111E10A4F06F0000000AA01C100E303D00101",
+                "E211E10A4F06F0000000AA01C100E303D00101",
+                SELF_CONSISTENT,
+                0x6A80,
+                "readLength<-upsert<-store"),
+        new RejectedShape(
+                "long-form-length-that-agrees-with-its-masked-value",
+                "The self-consistent long-form: 0x8B sets the high bit over a value whose true"
+                        + " length really is the masked 0x0B. This is the one shape that isolates"
+                        + " readLength's 0x80 check from the structural `!= end` checks that follow"
+                        + " every one of its call sites. Every other long-form case is caught"
+                        + " downstream by a length disagreement, so a mutant that deletes the 0x80"
+                        + " check survives them all; here the masked length agrees with the"
+                        + " encoding and the rule is otherwise perfectly valid, so deleting that"
+                        + " check turns this into an *accepted* rule. Confirmed by mutation run:"
+                        + " without this shape the mutant survives the whole corpus.",
+                "E28BE1044F00C100E303D00101",
+                "E20BE1044F00C100E303D00101",
+                "@0 tag E2: unusable long-form length 0x8B",
+                0x6A80,
+                "readLength<-upsert<-store"),
+        new RejectedShape(
+                "ref-do-without-the-device-app-id",
+                "REF-DO without the mandatory DeviceAppID-REF-DO.",
+                "E20FE1084F06F0000000AA01E303D00101",
+                "E211E10A4F06F0000000AA01C100E303D00101",
+                SELF_CONSISTENT,
+                0x6A80,
+                "requireTag<-validateRefDo<-upsert<-store"),
+        new RejectedShape(
+                "ref-do-members-in-reverse-order",
+                "REF-DO members in reverse order.",
+                "E211E10AC1004F06F0000000AA01E303D00101",
+                "E211E10A4F06F0000000AA01C100E303D00101",
+                SELF_CONSISTENT,
+                0x6A80,
+                "requireTag<-validateRefDo<-upsert<-store"),
+        new RejectedShape(
+                "aid-ref-do-of-four-bytes",
+                "AID-REF-DO of 4 bytes: shorter than any real applet AID, longer than the"
+                        + " zero-length catch-all.",
+                "E20FE1084F04F0000000C100E303D00101",
+                "E210E1094F05F000000000C100E303D00101",
+                SELF_CONSISTENT,
+                0x6A80,
+                "validateRefDo<-upsert<-store"),
+        new RejectedShape(
+                "aid-ref-do-of-seventeen-bytes",
+                "AID-REF-DO of 17 bytes: one over the ISO 7816-5 maximum.",
+                "E21CE1154F11A000000476416E64726F696443545340FFC100E303D00101",
+                "E21BE1144F10A000000476416E64726F696443545340C100E303D00101",
+                SELF_CONSISTENT,
+                0x6A80,
+                "validateRefDo<-upsert<-store"),
+        new RejectedShape(
+                "device-app-id-of-nineteen-bytes",
+                "DeviceAppID of 19 bytes: a truncated SHA-1 hash.",
+                "E224E11D4F06F0000000AA01C113000102030405060708090A0B0C0D0E0F101112E303D00101",
+                "E225E11E4F06F0000000AA01C114000102030405060708090A0B0C0D0E0F10111213E303D00101",
+                SELF_CONSISTENT,
+                0x6A80,
+                "validateRefDo<-upsert<-store"),
+        new RejectedShape(
+                "apdu-ar-do-of-one-byte-that-is-neither-never-nor-always",
+                "APDU-AR-DO of 1 byte carrying neither Never (00) nor Always (01).",
+                "E211E10A4F06F0000000AA01C100E303D00102",
+                "E211E10A4F06F0000000AA01C100E303D00101",
+                SELF_CONSISTENT,
+                0x6A80,
+                "validateArDo<-upsert<-store"),
+        new RejectedShape(
+                "apdu-ar-do-of-four-bytes",
+                "APDU-AR-DO of 4 bytes: half a filter/mask pair.",
+                "E214E10A4F06F0000000AA01C100E306D004FFFF0000",
+                "E218E10A4F06F0000000AA01C100E30AD008FFFF000000000000",
+                SELF_CONSISTENT,
+                0x6A80,
+                "validateArDo<-upsert<-store"),
+        new RejectedShape(
+                "perm-ar-do-of-seven-bytes",
+                "PERM-AR-DO of 7 bytes rather than the fixed 8.",
+                "E21AE10A4F06F0000000AA01C100E30CD00101DB0700000000000001",
+                "E21BE10A4F06F0000000AA01C100E30DD00101DB080000000000000001",
+                SELF_CONSISTENT,
+                0x6A80,
+                "validateArDo<-upsert<-store"),
+        new RejectedShape(
+                "third-member-after-the-perm-ar-do",
+                "A third AR-DO member behind the APDU-AR-DO/PERM-AR-DO pair. The grammar admits"
+                        + " exactly two members, so the tail check after the optional PERM-AR-DO is"
+                        + " the only thing stopping a third; nothing else in this list reaches it"
+                        + " with both legal members already consumed.",
+                "E21EE10A4F06F0000000AA01C100E310D00101DB080000000000000001D10101",
+                "E21BE10A4F06F0000000AA01C100E30DD00101DB080000000000000001",
+                SELF_CONSISTENT,
+                0x6A80,
+                "validateArDo<-upsert<-store"),
+        new RejectedShape(
+                "trailing-byte-after-the-ref-ar-do-value",
+                "Trailing byte after a structurally complete REF-AR-DO value.",
+                "E212E10A4F06F0000000AA01C100E303D0010100",
+                "E211E10A4F06F0000000AA01C100E303D00101",
+                "@19 tag 00: no length octet",
+                0x6A80,
+                "validateArDo<-upsert<-store"),
+    };
+
     private ExposedCardSimulator simulator;
     private AID appletAid;
     private Application application;
@@ -558,25 +721,28 @@ final class AraMPersonalizationFuzzTest {
      * mutation run proved it: deleting the long-form BER length check from {@code readLength}
      * (so {@code 81 xx} is silently read as length {@code xx & 0x7F}) survived the entire corpus.
      *
-     * <p>{@link #handWrittenRejectedShapes()} is exactly the right oracle for this, because every
-     * entry there is SEAC-plausible and documented as refused <em>by design</em> rather than by
-     * accident: unimplemented members (NFC-AR-DO, PKG-REF-DO), wrong member order, out-of-range
-     * lengths, long-form lengths, trailing bytes. Pinning them turns that comment into a contract.
-     * A shape that becomes legitimately supported should move out of that list, not be silently
-     * accepted here.
+     * <p>{@link #REJECTED_SHAPES} is exactly the right oracle for this, because every entry there
+     * is SEAC-plausible and documented as refused <em>by design</em> rather than by accident:
+     * unimplemented members (NFC-AR-DO, PKG-REF-DO), wrong member order, out-of-range lengths,
+     * long-form lengths, trailing bytes. Pinning them turns that comment into a contract. A shape
+     * that becomes legitimately supported should move out of that list, not be silently accepted
+     * here.
+     *
+     * <p>Rejection alone is a weak assertion, though, and the weakness is not theoretical: three
+     * entries of the first version of this list were thrown out by the outer length arithmetic in
+     * {@code upsert} and never reached the member rule they were written to pin. So this asserts
+     * the <em>rejection site</em> — the {@code AraMApplet} frames that were on the stack when the
+     * refusal was raised — and the exact status word, not membership of a six-element admit set.
+     * A shape refused upstream reports {@code checkedEnd<-upsert<-store} and fails here.
      */
     @Test
-    void shapesRejectedByDesignAreStillRejected() {
+    void shapesRejectedByDesignAreStillRejectedAtTheRuleTheyName() {
         personalizeBaseline();
 
-        List<byte[]> shapes = handWrittenRejectedShapes();
-        assertEquals(16, shapes.size(), "the by-design rejection list is expected to be complete");
-
-        int shapeIndex = 0;
-        for (byte[] shape : shapes) {
+        for (RejectedShape shape : REJECTED_SHAPES) {
             FuzzCase shapeCase =
-                    new FuzzCase("by-design-rejected[" + shapeIndex + "]", upsert(shape), 0);
-            shapeIndex++;
+                    new FuzzCase(
+                            "by-design-rejected[" + shape.name + "]", upsert(shape.encoding()), 0);
 
             for (boolean tightBuffer : new boolean[] {false, true}) {
                 Snapshot before = snapshot();
@@ -585,25 +751,135 @@ final class AraMPersonalizationFuzzTest {
                                 ? PaddedInput.tight(shapeCase.command)
                                 : PaddedInput.wrap(shapeCase.command, 0);
 
-                Integer statusWord = attemptPersonalization(shapeCase, input);
+                Rejection rejection = attemptPersonalizationForRejection(shapeCase, input);
 
-                assertTrue(
-                        statusWord != null,
+                assertEquals(
+                        hexOf(shape.statusWord),
+                        hexOf(rejection.statusWord),
+                        () -> "Wrong status word from " + shapeCase);
+                assertEquals(
+                        shape.site,
+                        rejection.site,
                         () ->
-                                "A shape documented as rejected by design was accepted: "
-                                        + shapeCase);
-                assertTrue(
-                        ALLOWED_STATUS_WORDS.contains(statusWord),
-                        () ->
-                                "Unexpected status word "
-                                        + hexOf(statusWord.intValue())
-                                        + " from "
+                                "Rejected somewhere other than the rule this entry names.\n"
+                                        + "  entry: "
+                                        + shape.name
+                                        + "\n  claim: "
+                                        + shape.claim
+                                        + "\n  case:  "
                                         + shapeCase);
                 assertSnapshotUnchanged(before, snapshot(), shapeCase);
             }
         }
 
         assertStillUsable(new FuzzCase("by-design-rejected:all", new byte[0], 0));
+    }
+
+    /**
+     * Vacuity guard: a by-design-rejected entry must be rejected by the grammar, not by its own
+     * broken length arithmetic.
+     *
+     * <p>This is the assertion the list was missing. Three entries used to declare BER lengths that
+     * disagreed with their own content — {@code E2} claiming 26 over 25 bytes, {@code E3} claiming
+     * 15 over 12 — so {@code upsert}'s {@code checkedEnd} threw them out before the member rule
+     * named in the comment was ever consulted. They passed for the wrong reason, and would have
+     * kept passing with that rule deleted.
+     *
+     * <p>So every entry's own encoding is walked here as BER and its declared lengths must span
+     * exactly their content. Two entries legitimately do not: their named defect <em>is</em> the
+     * length encoding, and each of those pins the exact disagreement rather than being waved
+     * through.
+     */
+    @Test
+    void byDesignRejectedShapesCarryOnlyTheStructuralDefectTheyName() {
+        for (RejectedShape shape : REJECTED_SHAPES) {
+            assertEquals(
+                    shape.structure,
+                    berLengthDisagreement(shape.encoding()),
+                    () ->
+                            "The rejected encoding's BER arithmetic is not what "
+                                    + shape.name
+                                    + " declares. An unintended disagreement means this entry is"
+                                    + " refused by the outer length check instead of by the rule it"
+                                    + " names.");
+            assertEquals(
+                    SELF_CONSISTENT,
+                    berLengthDisagreement(shape.repaired()),
+                    () -> "The repaired encoding of " + shape.name + " is not well-formed BER");
+        }
+    }
+
+    /**
+     * Attribution: each entry's repair, which touches only the property the entry names, must be
+     * accepted.
+     *
+     * <p>{@link #byDesignRejectedShapesCarryOnlyTheStructuralDefectTheyName()} proves the shape is
+     * not refused upstream and {@link #shapesRejectedByDesignAreStillRejectedAtTheRuleTheyName()}
+     * proves where it is refused. Neither proves the refusal is caused by the named property rather
+     * than by some second flaw that happens to live in the same method. This one does: repairing
+     * only that property flips the verdict, so the property is what the parser objected to.
+     */
+    @Test
+    void byDesignRejectedShapesAreAcceptedOnceTheirNamedPropertyIsRepaired() {
+        for (RejectedShape shape : REJECTED_SHAPES) {
+            personalizeCommand(new byte[] {TAG_DELETE, (byte) 0x00});
+
+            byte[] repaired = shape.repaired();
+            try {
+                personalizeCommand(upsert(repaired));
+            } catch (ISOException refused) {
+                fail(
+                        "Repairing "
+                                + shape.name
+                                + " at the property it names left the rule rejected with "
+                                + hexOf(refused.getReason() & 0xFFFF)
+                                + ", so the entry's rejection is not attributable to that"
+                                + " property: "
+                                + hexOf(repaired));
+            }
+            assertTrue(
+                    indexOf(snapshot().catalog, repaired) >= 0,
+                    () -> "The repaired form of " + shape.name + " did not reach the catalog");
+        }
+    }
+
+    /**
+     * Inventory guard, deliberately not a completeness claim.
+     *
+     * <p>An earlier version of this test asserted the list was "expected to be complete". It never
+     * was and could not be: the rejection surface is every shape the grammar refuses, which is
+     * unbounded, and nothing here enumerates it. What the count actually buys is that an entry
+     * cannot be dropped in passing — deleting one to make a red build green has to touch this
+     * number, and reviewers see it.
+     *
+     * <p>What the list does cover, and all it claims: at least one entry landing at each distinct
+     * rejection site the parser has, so no site is left with no by-design witness at all.
+     */
+    @Test
+    void theByDesignRejectionInventoryIsPinnedAndCoversEveryRejectionSite() {
+        assertEquals(
+                17,
+                REJECTED_SHAPES.length,
+                "Entries may be added, but dropping one has to be a deliberate, visible edit");
+
+        Set<String> names = new LinkedHashSet<String>();
+        Set<String> sites = new LinkedHashSet<String>();
+        for (RejectedShape shape : REJECTED_SHAPES) {
+            assertTrue(names.add(shape.name), () -> "Duplicate entry name: " + shape.name);
+            sites.add(shape.site);
+        }
+
+        assertEquals(
+                new LinkedHashSet<String>(
+                        Arrays.asList(
+                                "readLength<-upsert<-store",
+                                "requireTag<-validateRefDo<-upsert<-store",
+                                "validateRefDo<-upsert<-store",
+                                "requireTag<-validateArDo<-upsert<-store",
+                                "validateArDo<-upsert<-store")),
+                sites,
+                "Every rejection site the personalization grammar has needs a by-design witness;"
+                        + " a new site with no entry is an unguarded piece of the surface");
     }
 
     // ---------------------------------------------------------------------------------------
@@ -660,44 +936,9 @@ final class AraMPersonalizationFuzzTest {
      */
     private static List<byte[]> handWrittenRejectedShapes() {
         List<byte[]> shapes = new ArrayList<byte[]>();
-        // NFC-AR-DO (D1): a real SEAC member we do not implement.
-        shapes.add(hex("E211E10A4F06F0000000AA01C100E303D10101"));
-        // APDU-AR-DO plus NFC-AR-DO: the full two-member AR-DO from the SEAC spec.
-        shapes.add(hex("E216E10A4F06F0000000AA01C100E308D00101D10101"));
-        // PKG-REF-DO (CA) inside the REF-DO: Android package-name reference, unsupported.
-        shapes.add(hex("E21AE1134F06F0000000AA01C100CA0703636F6D2E78E303D00101"));
-        // PERM-AR-DO before APDU-AR-DO: right members, wrong SEAC order.
-        shapes.add(hex("E21AE10A4F06F0000000AA01C100E30CDB080000000000000001D00101"));
-        // AR-DO with no APDU-AR-DO at all, only the permission mask.
-        shapes.add(hex("E21AE10A4F06F0000000AA01C100E30CDB080000000000000001"));
-        // Long-form BER length (81 xx) where the short form fits: readLength rejects 0x80 bits.
-        shapes.add(hex("E28111E10A4F06F0000000AA01C100E303D00101"));
-        // The self-consistent long-form: 0x8B declares the high bit over a value whose true length
-        // really is the masked 0x0B. This is the one shape that isolates readLength's 0x80 check
-        // from the structural `!= end` checks that follow every one of its call sites. Every other
-        // long-form case is caught downstream by a length disagreement, so a mutation that deletes
-        // the 0x80 check survives them all; here the masked length agrees with the encoding and the
-        // rule is otherwise perfectly valid, so deleting that check turns this into an *accepted*
-        // rule. Confirmed by mutation run: without this shape the mutant survives the whole corpus.
-        shapes.add(hex("E28BE1044F00C100E303D00101"));
-        // REF-DO without the mandatory DeviceAppID-REF-DO.
-        shapes.add(hex("E20DE1084F06F0000000AA01E303D00101"));
-        // REF-DO members in reverse order.
-        shapes.add(hex("E211E10AC1004F06F0000000AA01E303D00101"));
-        // AID-REF-DO of 4 bytes: shorter than any real applet AID, longer than the catch-all.
-        shapes.add(hex("E20FE1084F04F0000000C100E303D00101"));
-        // AID-REF-DO of 17 bytes: one over the ISO 7816-5 maximum.
-        shapes.add(hex("E21CE1154F11A000000476416E64726F696443545340FFC100E303D00101"));
-        // DeviceAppID of 19 bytes: a truncated SHA-1 hash.
-        shapes.add(hex("E224E11D4F06F0000000AA01C113000102030405060708090A0B0C0D0E0F101112E303D00101"));
-        // APDU-AR-DO of 1 byte carrying neither Never (00) nor Always (01).
-        shapes.add(hex("E211E10A4F06F0000000AA01C100E303D00102"));
-        // APDU-AR-DO of 4 bytes: half a filter/mask pair.
-        shapes.add(hex("E214E10A4F06F0000000AA01C100E306D004FFFF0000"));
-        // PERM-AR-DO of 7 bytes rather than the fixed 8.
-        shapes.add(hex("E21DE10A4F06F0000000AA01C100E30FD00101DB0700000000000001"));
-        // Trailing byte after a structurally complete REF-AR-DO value.
-        shapes.add(hex("E212E10A4F06F0000000AA01C100E303D0010100"));
+        for (RejectedShape shape : REJECTED_SHAPES) {
+            shapes.add(shape.encoding());
+        }
         return shapes;
     }
 
@@ -918,6 +1159,118 @@ final class AraMPersonalizationFuzzTest {
                     unexpected);
             throw new AssertionError("unreachable");
         }
+    }
+
+    /**
+     * Drives the personalization entry point once for an input that must be rejected, and reports
+     * both the status word and where in the parser the refusal came from.
+     */
+    private Rejection attemptPersonalizationForRejection(FuzzCase fuzzCase, PaddedInput input) {
+        try {
+            application.processData(input.buffer, input.offset, input.length);
+        } catch (ISOException rejected) {
+            return new Rejection(rejected.getReason() & 0xFFFF, rejectionSite(rejected));
+        } catch (Throwable unexpected) {
+            fail(
+                    "Personalization threw "
+                            + unexpected.getClass().getName()
+                            + " instead of ISOException for "
+                            + fuzzCase,
+                    unexpected);
+            throw new AssertionError("unreachable");
+        }
+        fail("A shape documented as rejected by design was accepted: " + fuzzCase);
+        throw new AssertionError("unreachable");
+    }
+
+    /**
+     * The applet frames that were on the stack when the refusal was raised, innermost first, as
+     * {@code readLength<-upsert<-store}.
+     *
+     * <p>jCardSim's {@code ISOException.throwIt} constructs the exception at the throw point, so
+     * the trace names the real refusal site rather than a cached one. {@code malformed} is dropped
+     * because it is a shared one-liner every site funnels through and carries no information.
+     */
+    private static String rejectionSite(ISOException rejected) {
+        StringBuilder site = new StringBuilder();
+        for (StackTraceElement frame : rejected.getStackTrace()) {
+            if (!AraMApplet.class.getName().equals(frame.getClassName())
+                    || "malformed".equals(frame.getMethodName())) {
+                continue;
+            }
+            if (site.length() > 0) {
+                site.append("<-");
+            }
+            site.append(frame.getMethodName());
+        }
+        return site.toString();
+    }
+
+    /**
+     * Walks a byte array as BER and returns the first place a declared length does not exactly
+     * span its content, or {@code null} when the whole array walks cleanly.
+     *
+     * <p>Deliberately independent of the applet: it accepts the long-form lengths the applet
+     * refuses, because its job is to say whether an encoding is <em>structurally</em> sound, not
+     * whether this parser likes it. That separation is the point — an entry can then be structurally
+     * sound and still rejected, which is exactly the property a by-design rejection needs.
+     */
+    private static String berLengthDisagreement(byte[] value) {
+        return berLengthDisagreement(value, 0, value.length);
+    }
+
+    private static String berLengthDisagreement(byte[] value, int offset, int end) {
+        int cursor = offset;
+        while (cursor < end) {
+            int tag = value[cursor] & 0xFF;
+            if (cursor + 1 >= end) {
+                return "@" + cursor + " tag " + String.format("%02X", tag) + ": no length octet";
+            }
+            int declared = value[cursor + 1] & 0xFF;
+            int headerLength = 2;
+            if ((declared & 0x80) != 0) {
+                int lengthOctets = declared & 0x7F;
+                if (lengthOctets < 1 || lengthOctets > 2 || cursor + 2 + lengthOctets > end) {
+                    return "@"
+                            + cursor
+                            + " tag "
+                            + String.format("%02X", tag)
+                            + ": unusable long-form length 0x"
+                            + String.format("%02X", declared);
+                }
+                declared = 0;
+                for (int index = 0; index < lengthOctets; index++) {
+                    declared = (declared << 8) | (value[cursor + 2 + index] & 0xFF);
+                }
+                headerLength = 2 + lengthOctets;
+            }
+            int contentStart = cursor + headerLength;
+            int contentEnd = contentStart + declared;
+            if (contentEnd > end) {
+                return "@"
+                        + cursor
+                        + " tag "
+                        + String.format("%02X", tag)
+                        + ": declares "
+                        + declared
+                        + " over the "
+                        + (end - contentStart)
+                        + " bytes available";
+            }
+            if (isConstructedTag(tag)) {
+                String nested = berLengthDisagreement(value, contentStart, contentEnd);
+                if (nested != null) {
+                    return nested;
+                }
+            }
+            cursor = contentEnd;
+        }
+        return SELF_CONSISTENT;
+    }
+
+    /** The SEAC containers whose value is itself a sequence of TLVs. */
+    private static boolean isConstructedTag(int tag) {
+        return tag == 0xE1 || tag == 0xE2 || tag == 0xE3 || tag == 0xF0 || tag == 0xF1;
     }
 
     private void assertSnapshotUnchanged(Snapshot before, Snapshot after, FuzzCase fuzzCase) {
@@ -1345,6 +1698,84 @@ final class AraMPersonalizationFuzzTest {
             first = false;
         }
         return text.append('}').toString();
+    }
+
+    /**
+     * One SEAC-plausible encoding the applet refuses on purpose, plus the evidence that it is
+     * refused for the reason its name gives.
+     *
+     * <p>The extra fields exist because of a real defect in the first version of this list. Three
+     * entries declared BER lengths that disagreed with their own content, so {@code upsert}'s outer
+     * {@code checkedEnd} threw them out before the member rule named in the comment was ever
+     * consulted. Each was green, and each would have stayed green with the rule it claimed to guard
+     * deleted from the applet — a must-reject entry that passes for the wrong reason is the same
+     * false comfort this harness exists to remove. Three independent facts now have to hold, and
+     * any one of them falsifies that failure mode on its own.
+     */
+    private static final class RejectedShape {
+
+        /** Stable identifier, used in failure messages instead of a list index. */
+        private final String name;
+
+        /** What the entry claims the parser objects to. Printed when the site assertion fails. */
+        private final String claim;
+
+        private final String encodingHex;
+
+        /**
+         * The same shape with only the named property put right. Must be accepted, which is what
+         * attributes the rejection to that property rather than to some neighbouring flaw.
+         */
+        private final String repairedHex;
+
+        /**
+         * The expected result of walking {@link #encodingHex} as BER: {@link
+         * AraMPersonalizationFuzzTest#SELF_CONSISTENT} for every entry whose defect is grammatical,
+         * or the exact disagreement for the two entries whose named defect <em>is</em> the length
+         * encoding.
+         */
+        private final String structure;
+
+        private final int statusWord;
+
+        /** Expected {@code AraMApplet} frames at the refusal, innermost first. */
+        private final String site;
+
+        private RejectedShape(
+                String name,
+                String claim,
+                String encodingHex,
+                String repairedHex,
+                String structure,
+                int statusWord,
+                String site) {
+            this.name = name;
+            this.claim = claim;
+            this.encodingHex = encodingHex;
+            this.repairedHex = repairedHex;
+            this.structure = structure;
+            this.statusWord = statusWord;
+            this.site = site;
+        }
+
+        byte[] encoding() {
+            return hex(encodingHex);
+        }
+
+        byte[] repaired() {
+            return hex(repairedHex);
+        }
+    }
+
+    /** A refusal out of the personalization path: what it reported and where it came from. */
+    private static final class Rejection {
+        private final int statusWord;
+        private final String site;
+
+        private Rejection(int statusWord, String site) {
+            this.statusWord = statusWord;
+            this.site = site;
+        }
     }
 
     /** One reproducible corpus entry: what it is, the bytes, and where in the buffer they sit. */
