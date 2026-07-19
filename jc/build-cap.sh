@@ -17,6 +17,8 @@
 #   JC_CAP_TOOLCHAIN=/abs/path/to/cap-toolchain ./build-cap.sh
 #   JC_CAP_TOOLCHAIN=... ./build-cap.sh --jckit jc304_kit --suffix -jc304   # default
 #   JC_CAP_TOOLCHAIN=... ./build-cap.sh --jckit jc320v25.1_kit --suffix ''
+#   JC_CAP_TOOLCHAIN=... ./build-cap.sh --package-aid A00000015141434D \
+#     --applet-aid A00000015141434D00 --suffix -jc304-canary
 #
 # Output (created fresh under ./artifacts/caps/, which is gitignored):
 #   artifacts/caps/jc-ara-m-0.1<suffix>.cap
@@ -27,14 +29,33 @@ cd "$(dirname "$0")"
 
 JCKIT="jc304_kit"
 SUFFIX="-jc304"
+PACKAGE_AID="A00000015141434C"
+APPLET_AID="A00000015141434C00"
+OUTPUT_NAME="jc-ara-m-0.1"
 while [ $# -gt 0 ]; do
   case "$1" in
     --jckit)  JCKIT="$2"; shift 2 ;;
     --suffix) SUFFIX="$2"; shift 2 ;;
+    --package-aid) PACKAGE_AID="$2"; shift 2 ;;
+    --applet-aid) APPLET_AID="$2"; shift 2 ;;
+    --output-name) OUTPUT_NAME="$2"; shift 2 ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+
+if [[ ! "$PACKAGE_AID" =~ ^[0-9A-Fa-f]{10,32}$ ]] || (( ${#PACKAGE_AID} % 2 != 0 )); then
+  echo "ERROR: --package-aid must be 5..16 bytes of hex" >&2
+  exit 2
+fi
+if [[ ! "$APPLET_AID" =~ ^[0-9A-Fa-f]{10,32}$ ]] || (( ${#APPLET_AID} % 2 != 0 )); then
+  echo "ERROR: --applet-aid must be 5..16 bytes of hex" >&2
+  exit 2
+fi
+if [[ ! "$OUTPUT_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "ERROR: --output-name contains unsupported characters" >&2
+  exit 2
+fi
 
 # --- resolve toolchain ---
 if [ -z "${JC_CAP_TOOLCHAIN:-}" ] && [ ! -d ".toolchain" ]; then
@@ -62,7 +83,10 @@ JAVA_HOME="$JDK11" PATH="$JDK11/bin:$PATH" \
   ant -f cap-build.xml \
     -Djckit.name="$JCKIT" \
     -Dcap.suffix="$SUFFIX" \
+    -Dara.m.package.aid="$PACKAGE_AID" \
+    -Dara.m.applet.aid="$APPLET_AID" \
+    -Dara.m.output.name="$OUTPUT_NAME" \
     -Dglobalplatform.javacard.jar="$GLOBALPLATFORM_JAVACARD_JAR" \
     dist
 
-echo "built: artifacts/caps/jc-ara-m-0.1${SUFFIX}.cap"
+echo "built: artifacts/caps/${OUTPUT_NAME}${SUFFIX}.cap packageAid=${PACKAGE_AID} appletAid=${APPLET_AID}"

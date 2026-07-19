@@ -22,6 +22,9 @@
     <property name="caps.dir" location="${root.dir}/artifacts/caps"/>
     <property name="ara.m.sources" location="${root.dir}/src/main/java"/>
     <property name="ara.m.version" value="0.1"/>
+    <property name="ara.m.package.aid" value="A00000015141434C"/>
+    <property name="ara.m.applet.aid" value="A00000015141434C00"/>
+    <property name="ara.m.output.name" value="jc-ara-m-0.1"/>
 
     <taskdef name="javacard" classname="pro.javacard.ant.JavaCard" classpath="${ant.javacard.jar}"/>
 
@@ -34,12 +37,12 @@
             <cap jckit="${jckit.dir}"
                  sources="${ara.m.sources}"
                  package="works.relux.jcaram"
-                 aid="A00000015141434C"
+                 aid="${ara.m.package.aid}"
                  version="${ara.m.version}"
                  ints="false"
-                 output="${caps.dir}/jc-ara-m-0.1${cap.suffix}.cap"
-                jca="${caps.dir}/jc-ara-m-0.1${cap.suffix}.jca">
-                <applet class="works.relux.jcaram.AraMJCApplet" aid="A00000015141434C00"/>
+                 output="${caps.dir}/${ara.m.output.name}${cap.suffix}.cap"
+                jca="${caps.dir}/${ara.m.output.name}${cap.suffix}.jca">
+                <applet class="works.relux.jcaram.AraMJCApplet" aid="${ara.m.applet.aid}"/>
                 <import jar="${globalplatform.javacard.jar}"/>
             </cap>
         </javacard>
