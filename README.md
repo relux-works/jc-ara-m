@@ -70,7 +70,14 @@ jc-ara-m/
         ├── main/java/works/relux/jcaram/
         │   ├── AraMApplet.java
         │   └── AraMJCApplet.java
-        └── test/java/works/relux/jcaram/AraMAppletTest.java
+        ├── test/java/works/relux/jcaram/
+        │   ├── AraMAppletTest.java
+        │   ├── AraMPersonalizationFuzzTest.java  # TLV validator property/fuzz harness
+        │   ├── InstallParametersTest.java
+        │   ├── SeacParserOracleTest.java
+        │   └── Sha256VectorTest.java
+        └── test/resources/works/relux/jcaram/
+            └── cts-seac-rules.txt     # 41 real Android-CTS REF-AR-DOs, fuzz seeds
 ```
 
 The CAP package AID is `A00000015141434C`; the installable applet instance AID
@@ -438,6 +445,143 @@ acceptance gate.
 JUnit XML and HTML reports are written under `jc/build/test-results/test/` and
 `jc/build/reports/tests/test/`.
 
+### Personalization fuzz harness
+
+`AraMPersonalizationFuzzTest` runs as part of the normal `test` task. The
+hand-rolled TLV validator behind `Application.processData` is the only code that
+consumes attacker-influenced bytes, so it is driven with a bounded,
+deterministic-seeded corpus that asserts three invariants on every case:
+
+1. only `ISOException` escapes, with a status word from the small admitted set
+   (`6700`, `6581`, `6981`, `6A80`, `6A84`, `6A88`) — any other `Throwable` fails
+   the build;
+2. on any rejection the observable catalog, the refresh tag and the catalog
+   revision are bit-identical to the entry state, and the caller's input buffer
+   comes back untouched;
+3. the applet stays usable — after every rejection a well-formed store still
+   lands and deleting it returns the catalog exactly where it was.
+
+Every case runs in **two buffer shapes**: padded (the command at a non-zero
+offset inside a larger buffer, as a Security Domain hands over its APDU buffer)
+and tight (the array ends exactly where the command does). The tight shape is
+what actually tests the parser's bounds arithmetic — in the padded shape a read
+past the command end still lands inside the allocated array and returns a `0xA5`
+guard byte, whose top bit is set, so `readLength` rejects it and the over-read is
+laundered into a clean-looking `6A80`. Mutation runs confirmed this: deleting the
+`end > limit` check from `checkedEnd`, or the bounds check from `readLength`,
+survived the entire padded-only corpus and are caught immediately once the tight
+shape is included.
+
+`shapesRejectedByDesignAreStillRejected` closes the complementary blind spot.
+Every invariant above constrains how the applet *rejects*; none of them requires
+that anything be rejected at all, so a parser that silently grew more permissive
+would sail through the corpus (the accepted branch just resets the baseline and
+moves on). That test asserts the 16 SEAC-plausible shapes the applet refuses **by
+design** — unimplemented members, wrong member order, out-of-range lengths,
+long-form lengths, trailing bytes — are still refused. A shape that becomes
+legitimately supported must move out of that list rather than be quietly accepted.
+
+A fourth invariant is asserted by the pass that runs the corpus inside a
+transaction the applet does not own: it must never commit or abort that
+transaction. That pass also covers the other half of the write side —
+`upsert` branches on `JCSystem.getTransactionDepth()`, and at depth one it skips
+the non-atomic staging and joins the caller's commit instead. Rejections there
+are checked *through* a commit rather than an abort, which is both the stronger
+claim (committing publishes anything that was staged, so an unchanged catalog
+proves nothing was) and the only honest one available: jCardSim 3.0.5.9 does not
+journal persistent array writes, so `abortTransaction` does not roll them back
+and an abort-based assertion would pass for reasons unrelated to this applet.
+
+The corpus is seeded with real encodings rather than random bytes:
+`jc/src/test/resources/works/relux/jcaram/cts-seac-rules.txt` holds all 41
+`REF-AR-DO`s extracted verbatim from cheeriotb/aram-cardlet's Android Secure
+Element CTS catalog — valuable precisely because it mixes shapes this applet
+accepts with shapes it deliberately rejects (zero-length catch-all reference,
+all-`FF` wildcard AID with a carrier-privilege `PERM-AR-DO`, 8/16-byte APDU
+filter/mask pairs, 20-byte certificate hashes). Those seeds are extended with
+hand-written unsupported SEAC shapes (`NFC-AR-DO`, `PKG-REF-DO`, long-form BER
+lengths, reordered members) and then mutated by truncation, length-field
+corruption, tag substitution, bit flips, byte insertion/deletion, splicing and
+nesting-depth abuse. The invariants are checked both with a small baseline
+catalog and with the catalog provisioned to capacity, which is a different parser
+state: every stored record is re-parsed on each upsert.
+
+### Install-parameter fuzz harness
+
+`AraMInstallParameterFuzzTest` covers the applet's **second** attacker-influenced
+parser, `AraMJCApplet.resolveActiveRuleCapacity`, which reads the active-rule
+capacity R out of the GlobalPlatform installation parameter array. It runs in the
+same `test` task from a deterministic corpus (~422 cases, ~844 executions across
+the two buffer shapes) built from ten well-formed parameter blocks — absent
+block, bare `80 01 R`, `C9`-wrapped, at and over the compiled maximum — under the
+same mutators.
+
+The invariant is **inverted** relative to the personalization path. There, a
+rejection must be a no-op, because the catalog is already live. Here there is no
+prior state to preserve; the danger is the opposite one — a malformed block that
+is quietly tolerated and silently yields a default capacity nobody asked for. An
+operator who requested R=48 and got R=16 because a byte was mangled in transit
+would not find out until the seventeenth rule failed to store on a card already
+in the field. So:
+
+1. only `ISOException` escapes (asserted at the parser boundary, since jCardSim
+   wraps install-time throws in `SystemException` and would erase the
+   distinction);
+2. a returned capacity is always in `1..MAX_ACTIVE_RULE_CAPACITY` — never zero,
+   never over the compiled maximum;
+3. a block the parser refuses also fails the real installation and leaves **no**
+   instance registered;
+4. an accepted block yields an instance whose reported capacity, arena and
+   bitmaps are sized from exactly the capacity the parser resolved.
+
+`everyEncodableCapacityByteIsRefusedHonouredOrClamped` walks all 256 capacity
+bytes so the boundary cannot be missed by sampling: `0` refused, `1..64`
+honoured, `65..255` clamped. `aPresentButMalformedBlockNeverSilentlyYieldsTheDefaultCapacity`
+pins the specific failure mode above — an absent block legitimately means "use
+the default", but a block that is *present and corrupt* must never resolve to it.
+`anInstallArrayTruncatedBeforeTheParameterBlockIsRejectedRatherThanDefaulted`
+covers the other half of the same risk: every prefix of a well-formed array that
+stops short of the parameters length byte, plus a bare `C9` container tag with no
+length behind it.
+
+Invariants 1–4 are all *upper* bounds — they constrain what the parser may do
+when it accepts or rejects, but none of them says anything *must* be rejected, so
+a parser that gradually stops rejecting things would stay green.
+`theCorpusAcceptRejectDecisionMatchesItsPinnedGoldenVector` closes that gap by
+making the corpus's own verdict the assertion: every execution contributes
+`A<capacity>` or `R<statusWord>` to a vector that is counted, histogrammed and
+SHA-256 digested, and the summary is pinned in the test.
+
+**When it fails, it is not a flake.** Either the parser changed its mind about an
+input — decide whether that is intended and, if so, re-pin
+`GOLDEN_DECISION_SUMMARY` in the same commit as the parser change — or the corpus
+construction changed, in which case re-pin and say so. The assertion message
+prints the observed summary ready to paste. Never re-pin to turn red green
+without naming which inputs moved and why. Under either soak property the test
+skips rather than fails, since it is pinned to the default corpus.
+
+The committed personalization run is ~2325 cases — ~4650 executions across the
+two buffer shapes — and both harnesses together finish in well under a second. To
+widen a run deliberately — for example when vetting a new default seed (both
+harnesses read the same two properties):
+
+```bash
+./gradlew test --tests '*AraMPersonalizationFuzzTest*' --no-daemon \
+    -Param.fuzz.seed=0xDEADBEEF -Param.fuzz.mutants=64
+```
+
+Both properties are unset in CI, so the checked-in corpus stays reproducible and
+a failure reproduces from the case label and hex the assertion prints. Widening
+the run is worth doing when the harness changes: a soak at
+`-Param.fuzz.seed=0x1234` is what caught the harness asserting byte-exact catalog
+equality across a re-provisioning. Record placement rotates with the catalog
+revision (`findInactiveRecord` starts its scan at `catalogRevision % recordCount`),
+so the same rule set legitimately comes back in a different slot order. The
+catalog is a **set** of rules and no host may key on its order;
+`reprovisionedCatalogKeepsItsRuleSetAndAddressabilityRegardlessOfSlotOrder` pins
+that, along with the part that must not move — every rule stays individually
+addressable by its exact `REF-DO` whatever slot it landed in.
+
 ## CAP build
 
 Building a real CAP needs an external Java Card toolchain (`ant-javacard.jar`
@@ -510,6 +654,18 @@ Java Card converter and CAP verifier.
   `jc/build/`.
 - jCardSim (`com.klinec:jcardsim:3.0.5.9`) — simulator used by
   `AraMAppletTest`; Gradle resolves it from Maven Central.
+- Personalization fuzz harness (`AraMPersonalizationFuzzTest`) — property/fuzz
+  gate over the TLV validator, run by the normal `test` task. Widen a run with
+  `-Param.fuzz.seed=...` / `-Param.fuzz.mutants=...`; see "Personalization fuzz
+  harness" above. Seeds live in
+  `jc/src/test/resources/works/relux/jcaram/cts-seac-rules.txt`.
+- Install-parameter fuzz harness (`AraMInstallParameterFuzzTest`) — the same
+  gate over `AraMJCApplet.resolveActiveRuleCapacity`, with the inverted
+  invariant (a malformed block must fail installation loudly and register
+  nothing). Carries a pinned accept/reject golden vector, so an over-accepting
+  parser fails the build rather than passing quietly; the pin is skipped under
+  either soak property. Same two soak properties; see "Install-parameter fuzz
+  harness".
 - Ant + ant-javacard (`jc/cap-build.xml`) — converts and verifies a real Java
   Card Classic CAP. Run the JDK 11 command above; output goes to
   `jc/artifacts/caps/`.

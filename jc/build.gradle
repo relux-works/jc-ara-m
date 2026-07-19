@@ -72,6 +72,16 @@ tasks.named('check') {
 test {
     useJUnitPlatform()
     jvmArgs '--add-modules', 'java.smartcardio'
+    // Soak knobs shared by both fuzz harnesses — AraMPersonalizationFuzzTest and
+    // AraMInstallParameterFuzzTest read the same property names, so these widen both at once.
+    // Unset in CI, so the committed run stays the deterministic regression corpus; pass
+    // -Param.fuzz.seed / -Param.fuzz.mutants to widen it. Note that the install harness's pinned
+    // golden decision vector is skipped under either knob, since it is pinned to the default corpus.
+    ['aram.fuzz.seed', 'aram.fuzz.mutants'].each { key ->
+        if (project.hasProperty(key)) {
+            systemProperty key, project.property(key)
+        }
+    }
     testLogging {
         events 'passed', 'skipped', 'failed'
         showStandardStreams = false
