@@ -1,0 +1,61 @@
+@startuml
+!theme plain
+
+title Authenticated resumable reconciliation of an N-rule catalog
+
+actor "TSM / provisioning service" as TSM
+participant "Card manager / ISD" as ISD
+participant "ARA-M" as ARAM
+database "Desired catalog\nkeyed by REF-DO" as Desired
+
+autonumber
+
+TSM -> ARAM: SELECT + GET DATA [All]
+loop While FF40 advertised length is incomplete
+  TSM -> ARAM: GET DATA [Next] FF60
+  ARAM --> TSM: Next raw catalog bytes + 9000
+end
+TSM -> Desired: Normalize current and desired rules\nby AID + DeviceAppID
+TSM -> TSM: Reject duplicate keys; check desired count <= capacity
+TSM -> TSM: Compute deterministic diff
+
+TSM -> ISD: Open authenticated administrative channel
+TSM -> ISD: INSTALL [for personalization]
+
+group Fail-closed mutations
+  loop Byte-changing updates for existing exact keys in canonical order
+    TSM -> ISD: STORE DATA F0 (one complete REF-AR-DO)
+    ISD -> ARAM: processData(F0 upsert)
+    ARAM --> ISD: 9000
+    ISD --> TSM: Status
+  end
+  loop Obsolete or broader keys in canonical order
+    TSM -> ISD: STORE DATA F1 (AID / REF-DO / all)
+    ISD -> ARAM: processData(F1)
+    ARAM --> ISD: 9000 or 6A88
+    ISD --> TSM: Status
+  end
+  loop New keys in canonical order
+    TSM -> ISD: STORE DATA F0 (one complete REF-AR-DO)
+    ISD -> ARAM: processData(F0 add)
+    ARAM --> ISD: 9000
+    ISD --> TSM: Status
+  end
+end
+
+alt Session or transport fails mid-manifest
+  TSM -> TSM: Do not replay an assumed suffix
+  TSM -> ARAM: Re-read FF40 / FF60 and refresh
+  TSM -> Desired: Recompute remaining diff
+  note right of TSM
+    Each accepted F0/F1 is already a valid atomic catalog mutation.
+    Resume converges because identical F0 is a no-op and absent deletes
+    are treated as satisfied only after readback.
+  end note
+else All planned commands return accepted status
+  TSM -> ARAM: Re-read FF40 / FF60 and DF20
+  ARAM --> TSM: Effective catalog + refresh
+  TSM -> Desired: Compare normalized sets
+end
+
+@enduml

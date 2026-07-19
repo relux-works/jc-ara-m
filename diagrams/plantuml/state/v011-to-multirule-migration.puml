@@ -1,0 +1,39 @@
+@startuml
+!theme plain
+
+title CARD#5 v0.1.1 to multi-rule migration with rollback
+
+hide empty description
+top to bottom direction
+
+[*] --> V011
+
+state "v0.1.1 active" as V011
+state "Preflight evidence ready" as Preflight
+state "Maintenance: no standard ARA-M" as NoAra
+state "Multi-rule applet installed\nunprovisioned" as NewEmpty
+state "Multi-rule catalog verified" as NewReady
+state "Rollback v0.1.1 restored" as Rollback
+state "Stop: preserve v0.1.1" as Stop
+
+V011 --> Preflight : export current rule; retain no secrets\nverify rollback CAP and multi-rule canary
+V011 --> Stop : any preflight gate fails
+
+Preflight --> NoAra : remove card from Android\ndelete old standard package/instance
+NoAra --> NewEmpty : load/install multi-rule release\nat standard ARA-M AID
+NewEmpty --> NewReady : restore exported rule first\nreconcile desired N rules\nverify FF40/FF60, DF20, raw E2=6982
+
+NoAra --> Rollback : new load/install fails
+NewEmpty --> Rollback : provisioning/readback fails
+Rollback --> V011 : reinstall verified v0.1.1 CAP\nrestore exported rule and verify
+
+NewReady --> [*]
+Stop --> [*]
+
+note bottom of NoAra
+The standard ARA-M AID cannot be held by both versions at once.
+The maintenance interval is fail-closed on Android; rollback assets
+and the exported rule are mandatory before deleting v0.1.1.
+end note
+
+@enduml

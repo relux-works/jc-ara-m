@@ -1,0 +1,52 @@
+@startuml
+!theme plain
+
+title Atomic multi-rule mutation and refresh publication
+
+actor "OTA provisioner" as OTA
+participant "Security Domain" as SD
+control "ARA-M parser / catalog" as ARA
+collections "inactive physical record" as Spare
+database "active bitmap\nrefresh tag\nrevision" as Meta
+participant "Java Card RE\ntransaction service" as JCRE
+
+autonumber
+
+OTA -> SD: Authenticated STORE DATA\nF0 upsert or F1 delete
+SD -> ARA: Application.processData(full APDU buffer)
+ARA -> ARA: Validate complete command and rule
+ARA -> ARA: Find exact REF-DO / deletion matches
+
+alt F0 is byte-identical to active rule
+  ARA --> SD: 9000 (idempotent no-op)
+  SD --> OTA: 9000; refresh unchanged
+else Mutation changes the catalog
+  opt F0 add or update
+    alt ARA-M enters at transaction depth zero
+      ARA -> Spare: Write length=0, rule bytes, final length\n(non-atomic; committed-state spare is unreachable)
+    else Security Domain already owns a transaction
+      ARA -> JCRE: Check unused commit capacity
+      ARA -> Spare: Atomic copy of complete candidate record\ninside caller-owned transaction
+    end
+  end
+  ARA -> ARA: Build next active bitmap,\nnew refresh tag, next revision in transient RAM
+
+  critical Visibility commit
+    ARA -> JCRE: beginTransaction() if callback owns none
+    ARA -> Meta: Atomic copy of bitmap + refresh + revision
+    ARA -> JCRE: commitTransaction() if owned
+  end
+
+  Meta --> ARA: New catalog and refresh become visible together
+  ARA --> SD: 9000
+  SD --> OTA: 9000
+end
+
+note over Spare,Meta
+On the owned path, a torn spare write is unreachable and metadata rolls back.
+On the joined path, candidate and metadata writes both roll back with the outer
+transaction, even across several callbacks. After commit, only the new record
+set is reachable and refresh/revision describe that same state.
+end note
+
+@enduml
