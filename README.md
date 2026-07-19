@@ -265,3 +265,7 @@ Java Card converter and CAP verifier.
 - [AOSP AccessRuleApplet](https://android.googlesource.com/platform/packages/apps/SecureElement/+/refs/heads/main/src/com/android/se/security/ara/AccessRuleApplet.java)
 - [AOSP AraController](https://android.googlesource.com/platform/packages/apps/SecureElement/+/refs/heads/main/src/com/android/se/security/ara/AraController.java)
 - [AOSP UICC carrier privileges](https://source.android.com/docs/core/connect/uicc)
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
