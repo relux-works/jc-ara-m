@@ -1,9 +1,11 @@
 package provisioner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +47,91 @@ func TestPlanDiffUsesDeterministicFailClosedOrdering(t *testing.T) {
 	want := []MutationPhase{PhaseUpdate, PhaseDelete, PhaseAdd, PhaseAdd}
 	if !reflect.DeepEqual(phases, want) {
 		t.Fatalf("phases = %v, want %v", phases, want)
+	}
+}
+
+func TestPlanDiffRefusesCatchAllGrantWithoutOptIn(t *testing.T) {
+	scoped := testRule(t, "F0000000AA01", "", 0x01)
+	catchAllAllow := testRule(t, "", "", 0x01)
+
+	_, err := PlanDiff(nil, []Rule{scoped, catchAllAllow}, 16)
+	if err == nil {
+		t.Fatal("PlanDiff accepted a catch-all allow without the opt-in")
+	}
+	if !strings.Contains(err.Error(), catchAllAllow.Identifier()) {
+		t.Fatalf("error does not name the offending rule %s: %v", catchAllAllow.Identifier(), err)
+	}
+	if strings.Contains(err.Error(), scoped.Identifier()) {
+		t.Fatalf("error names an unrelated rule: %v", err)
+	}
+}
+
+func TestPlanDiffRefusesCatchAllApduFilterGrantWithoutOptIn(t *testing.T) {
+	filtered, err := ParseRule(buildRuleWithAPDURule(nil, nil, bytes.Repeat([]byte{0xA0}, 8)))
+	if err != nil {
+		t.Fatalf("ParseRule: %v", err)
+	}
+
+	if _, err := PlanDiff(nil, []Rule{filtered}, 16); err == nil {
+		t.Fatal("PlanDiff accepted a catch-all APDU filter grant without the opt-in")
+	}
+}
+
+func TestPlanDiffAcceptsCatchAllGrantWithOptIn(t *testing.T) {
+	catchAllAllow := testRule(t, "", "", 0x01)
+
+	plan, err := PlanDiff(nil, []Rule{catchAllAllow}, 16, AllowCatchAllGrants())
+	if err != nil {
+		t.Fatalf("PlanDiff with opt-in: %v", err)
+	}
+	if len(plan.Mutations) != 1 || plan.Mutations[0].Phase != PhaseAdd {
+		t.Fatalf("unexpected plan: %+v", plan.Mutations)
+	}
+}
+
+func TestPlanDiffAcceptsCatchAllDenyWithoutOptIn(t *testing.T) {
+	catchAllDeny := testRule(t, "", "", 0x00)
+
+	plan, err := PlanDiff(nil, []Rule{catchAllDeny}, 16)
+	if err != nil {
+		t.Fatalf("PlanDiff of a catch-all deny: %v", err)
+	}
+	if len(plan.Mutations) != 1 || plan.Mutations[0].Phase != PhaseAdd {
+		t.Fatalf("unexpected plan: %+v", plan.Mutations)
+	}
+}
+
+func TestPlanDiffRemovesAnExistingCatchAllGrantWithoutOptIn(t *testing.T) {
+	catchAllAllow := testRule(t, "", "", 0x01)
+
+	plan, err := PlanDiff([]Rule{catchAllAllow}, nil, 16)
+	if err != nil {
+		t.Fatalf("PlanDiff removing an on-card catch-all: %v", err)
+	}
+	if len(plan.Mutations) != 1 || plan.Mutations[0].Phase != PhaseDelete {
+		t.Fatalf("unexpected plan: %+v", plan.Mutations)
+	}
+}
+
+func TestReconcileRefusesCatchAllGrantWithoutOptInAndNeverCallsSink(t *testing.T) {
+	state := newMemoryCatalog()
+	sink := &interruptingMutator{state: state, failAfter: -1}
+	reconciler := Reconciler{Source: state, Sink: sink}
+	desired := []Rule{testRule(t, "", "", 0x01)}
+
+	if _, err := reconciler.Reconcile(context.Background(), desired, 16, true); err == nil {
+		t.Fatal("Reconcile accepted a catch-all allow without the opt-in")
+	}
+	if sink.calls != 0 {
+		t.Fatalf("sink calls = %d, want 0", sink.calls)
+	}
+
+	result, err := reconciler.Reconcile(context.Background(), desired, 16, true, AllowCatchAllGrants())
+	if err != nil {
+		t.Fatalf("Reconcile with opt-in: %v", err)
+	}
+	if !result.Verified || sink.calls != 1 {
+		t.Fatalf("verified=%v sink calls=%d", result.Verified, sink.calls)
 	}
 }
 

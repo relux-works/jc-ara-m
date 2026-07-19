@@ -53,6 +53,11 @@ final class AraMAppletTest {
                             + "E303D00101");
     private static final byte[] OTHER_APP_ALLOW_REF_AR_DO =
             ruleFor(OTHER_APPLET_AID, new byte[0], true);
+    /** SEAC catch-all reference: a zero-length AID-REF-DO matches every SE applet. */
+    private static final byte[] CATCH_ALL_ALLOW_REF_AR_DO =
+            hex("E20BE1044F00C100E303D00101");
+    private static final byte[] CATCH_ALL_DENY_REF_AR_DO =
+            hex("E20BE1044F00C100E303D00100");
 
     private static final byte[] SHA256_CERT_HASH =
             hex(
@@ -471,19 +476,75 @@ final class AraMAppletTest {
     }
 
     @Test
-    void zeroLengthAidUpsertReturns6A80WithoutMutation() {
+    void catchAllRuleIsStoredAlongsideAidScopedRules() {
         personalize(PERMISSIVE_ALLOW_REF_AR_DO);
-        byte[] invalidRule = ruleFor(new byte[0], new byte[0], true);
+        byte[] refreshBefore = getRefreshTag();
 
-        assertWrongDataWithoutMutation(upsert(invalidRule));
+        personalize(CATCH_ALL_ALLOW_REF_AR_DO);
+
+        assertEquals(13, CATCH_ALL_ALLOW_REF_AR_DO.length);
+        assertArrayEquals(
+                allRules(PERMISSIVE_ALLOW_REF_AR_DO, CATCH_ALL_ALLOW_REF_AR_DO),
+                getAllRules());
+        assertFalse(Arrays.equals(refreshBefore, getRefreshTag()));
     }
 
     @Test
-    void zeroLengthAidExactDeleteReturns6A80WithoutMutation() {
+    void catchAllRuleIsReplacedInPlaceByItsExactRefDo() {
         personalize(PERMISSIVE_ALLOW_REF_AR_DO);
-        byte[] invalidRule = ruleFor(new byte[0], new byte[0], true);
+        personalize(CATCH_ALL_ALLOW_REF_AR_DO);
+
+        personalize(CATCH_ALL_DENY_REF_AR_DO);
+
+        assertArrayEquals(
+                allRules(PERMISSIVE_ALLOW_REF_AR_DO, CATCH_ALL_DENY_REF_AR_DO),
+                getAllRules());
+    }
+
+    @Test
+    void catchAllRuleIsDeletedByItsExactRefDo() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+        personalize(CATCH_ALL_ALLOW_REF_AR_DO);
+
+        personalizeCommand(deleteByRefDo(refDoOf(CATCH_ALL_ALLOW_REF_AR_DO)));
+
+        assertArrayEquals(allRules(PERMISSIVE_ALLOW_REF_AR_DO), getAllRules());
+    }
+
+    @Test
+    void catchAllRuleWithCertificateBoundKeyIsADistinctExactKey() {
+        personalize(CATCH_ALL_ALLOW_REF_AR_DO);
+        byte[] certBoundCatchAll = ruleFor(new byte[0], SHA256_CERT_HASH, true);
+
+        personalize(certBoundCatchAll);
+
+        assertArrayEquals(
+                allRules(CATCH_ALL_ALLOW_REF_AR_DO, certBoundCatchAll), getAllRules());
+    }
+
+    @Test
+    void subAidLengthsBetweenOneAndFourUpsertReturn6A80WithoutMutation() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+
+        for (int aidLength = 1; aidLength <= 4; aidLength++) {
+            byte[] invalidRule = ruleFor(new byte[aidLength], new byte[0], true);
+            assertWrongDataWithoutMutation(upsert(invalidRule));
+        }
+    }
+
+    @Test
+    void subAidLengthExactDeleteReturns6A80WithoutMutation() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+        byte[] invalidRule = ruleFor(new byte[4], new byte[0], true);
 
         assertWrongDataWithoutMutation(deleteByRefDo(refDoOf(invalidRule)));
+    }
+
+    @Test
+    void zeroLengthAidDeleteSelectorReturns6A80WithoutMutation() {
+        personalize(CATCH_ALL_ALLOW_REF_AR_DO);
+
+        assertWrongDataWithoutMutation(deleteByAid(new byte[0]));
     }
 
     @Test

@@ -353,6 +353,9 @@ final class AraMApplet {
         short cursor = requireTag(input, aidTagOffset, end, TAG_AID_REF_DO);
         short aidLength = readLength(input, cursor, end);
         cursor++;
+        // The F1 AID selector stays a real applet AID: a zero-length selector
+        // would be an ambiguous second spelling of the empty delete-all value.
+        // The catch-all rule is deleted through its exact REF-DO like any other.
         if (aidLength < (short) 5 || aidLength > (short) 16) {
             malformed();
         }
@@ -726,7 +729,9 @@ final class AraMApplet {
         cursor = requireTag(input, cursor, refDoEnd, TAG_AID_REF_DO);
         short aidLength = readLength(input, cursor, refDoEnd);
         cursor++;
-        if (aidLength < (short) 5 || aidLength > (short) 16) {
+        // SEAC allows a zero-length AID-REF-DO as the catch-all reference that
+        // matches every SE applet. Any other sub-AID length stays malformed.
+        if (aidLength != (short) 0 && (aidLength < (short) 5 || aidLength > (short) 16)) {
             malformed();
         }
         cursor = checkedEnd(cursor, aidLength, refDoEnd);

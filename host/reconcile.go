@@ -67,7 +67,45 @@ func (p Plan) Summary() PlanSummary {
 	return summary
 }
 
-func PlanDiff(currentRules, desiredRules []Rule, capacity int) (Plan, error) {
+// planPolicy holds host-side policy decisions that are deliberately absent from
+// the card: the applet is a faithful SEAC store, the reviewable guard lives here.
+type planPolicy struct {
+	allowCatchAllGrants bool
+}
+
+// PlanOption opts a plan out of a default-closed host policy guard.
+type PlanOption func(*planPolicy)
+
+// AllowCatchAllGrants opts in to desired rules that grant access to every SE
+// applet through a zero-length AID-REF-DO. Without it, such a rule is refused.
+func AllowCatchAllGrants() PlanOption {
+	return func(policy *planPolicy) { policy.allowCatchAllGrants = true }
+}
+
+// CheckCatchAllPolicy refuses a desired catalog that grants access through the
+// zero-length AID-REF-DO catch-all unless the caller opted in. A catch-all that
+// denies access needs no opt-in: it only removes reach.
+func CheckCatchAllPolicy(desired []Rule, options ...PlanOption) error {
+	policy := planPolicy{}
+	for _, option := range options {
+		option(&policy)
+	}
+	if policy.allowCatchAllGrants {
+		return nil
+	}
+	for _, rule := range desired {
+		if rule.IsCatchAll() && rule.GrantsAccess() {
+			return fmt.Errorf(
+				"desired rule %s (key %s) grants access to every SE applet through a zero-length AID-REF-DO catch-all; re-run with --allow-catch-all to opt in",
+				rule.Identifier(),
+				rule.Key.Identifier(),
+			)
+		}
+	}
+	return nil
+}
+
+func PlanDiff(currentRules, desiredRules []Rule, capacity int, options ...PlanOption) (Plan, error) {
 	current, err := NormalizeRules(currentRules, capacity)
 	if err != nil {
 		return Plan{}, fmt.Errorf("normalize current catalog: %w", err)
@@ -75,6 +113,11 @@ func PlanDiff(currentRules, desiredRules []Rule, capacity int) (Plan, error) {
 	desired, err := NormalizeRules(desiredRules, capacity)
 	if err != nil {
 		return Plan{}, fmt.Errorf("normalize desired catalog: %w", err)
+	}
+	// Only the desired state is policed. An existing on-card catch-all must stay
+	// plannable so it can be diffed away without the opt-in.
+	if err := CheckCatchAllPolicy(desired, options...); err != nil {
+		return Plan{}, err
 	}
 	currentByKey := make(map[string]Rule, len(current))
 	desiredByKey := make(map[string]Rule, len(desired))
@@ -185,7 +228,7 @@ type ReconcileResult struct {
 	Verified bool `json:"verified"`
 }
 
-func (r Reconciler) Reconcile(ctx context.Context, desired []Rule, capacity int, execute bool) (ReconcileResult, error) {
+func (r Reconciler) Reconcile(ctx context.Context, desired []Rule, capacity int, execute bool, options ...PlanOption) (ReconcileResult, error) {
 	if r.Source == nil {
 		return ReconcileResult{}, errors.New("catalog source is required")
 	}
@@ -193,7 +236,7 @@ func (r Reconciler) Reconcile(ctx context.Context, desired []Rule, capacity int,
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("read current catalog: %w", err)
 	}
-	plan, err := PlanDiff(current.Rules, desired, capacity)
+	plan, err := PlanDiff(current.Rules, desired, capacity, options...)
 	if err != nil {
 		return ReconcileResult{}, err
 	}
@@ -214,7 +257,7 @@ func (r Reconciler) Reconcile(ctx context.Context, desired []Rule, capacity int,
 	if err != nil {
 		return result, fmt.Errorf("read back catalog: %w", err)
 	}
-	remaining, err := PlanDiff(readback.Rules, desired, capacity)
+	remaining, err := PlanDiff(readback.Rules, desired, capacity, options...)
 	if err != nil {
 		return result, fmt.Errorf("normalize readback: %w", err)
 	}

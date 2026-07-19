@@ -45,6 +45,7 @@ func runPlan(args []string) error {
 	flags.SetOutput(os.Stderr)
 	currentPath := flags.String("current", "", "0600 JSON manifest containing the current catalog")
 	desiredPath := flags.String("desired", "", "0600 JSON manifest containing the desired catalog")
+	allowCatchAll := flags.Bool("allow-catch-all", false, "opt in to a desired rule granting access to every SE applet")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -62,7 +63,7 @@ func runPlan(args []string) error {
 	if currentCapacity != desiredCapacity {
 		return fmt.Errorf("manifest capacities differ: current=%d desired=%d", currentCapacity, desiredCapacity)
 	}
-	plan, err := provisioner.PlanDiff(current, desired, desiredCapacity)
+	plan, err := provisioner.PlanDiff(current, desired, desiredCapacity, planOptions(*allowCatchAll)...)
 	if err != nil {
 		return err
 	}
@@ -79,6 +80,7 @@ func runReconcile(args []string) error {
 	jcHarness := flags.String("jc-harness", "jc-harness", "jc-harness executable")
 	gpHelper := flags.String("gp-t0-helper", "gp-t0-helper", "gp-t0-helper executable")
 	execute := flags.Bool("execute", false, "apply the authenticated N-command manifest")
+	allowCatchAll := flags.Bool("allow-catch-all", false, "opt in to a desired rule granting access to every SE applet")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -113,7 +115,8 @@ func runReconcile(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	result, err := (provisioner.Reconciler{Source: reader, Sink: sink}).Reconcile(ctx, desired, capacity, *execute)
+	result, err := (provisioner.Reconciler{Source: reader, Sink: sink}).Reconcile(
+		ctx, desired, capacity, *execute, planOptions(*allowCatchAll)...)
 	if err != nil {
 		return err
 	}
@@ -227,6 +230,13 @@ func runMigrate(args []string) error {
 	return emit(map[string]any{"ok": true, "dry_run": false, "result": result})
 }
 
+func planOptions(allowCatchAll bool) []provisioner.PlanOption {
+	if !allowCatchAll {
+		return nil
+	}
+	return []provisioner.PlanOption{provisioner.AllowCatchAllGrants()}
+}
+
 func decodeAID(encoded string) ([]byte, error) {
 	aid, err := hex.DecodeString(encoded)
 	if err != nil || len(aid) < 5 || len(aid) > 16 {
@@ -250,11 +260,14 @@ func usage() {
 	fmt.Fprint(os.Stderr, `aram-provisioner — authenticated desired-state ARA-M host controller
 
 Commands:
-  plan --current FILE --desired FILE
+  plan --current FILE --desired FILE [--allow-catch-all]
       Offline, no-card deterministic updates->deletes->adds plan. Output is
-      sanitized: key/rule digests and lengths only, never rule bytes.
+      sanitized: key/rule digests and lengths only, never rule bytes. A desired
+      rule that grants access through the zero-length AID-REF-DO catch-all is
+      refused unless --allow-catch-all is passed; a catch-all deny never needs it.
 
   reconcile --desired FILE --reader NAME [--execute --credentials FILE]
+            [--allow-catch-all]
       Re-read FF40/FF60 via jc-harness, diff, and optionally send one
       authenticated gp-t0-helper secure-apdu manifest. Re-run after any
       transport interruption; the command always re-reads/re-diffs.

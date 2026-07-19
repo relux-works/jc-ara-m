@@ -41,14 +41,28 @@ func (k RuleKey) Identifier() string {
 
 // Rule contains one complete, validated REF-AR-DO (E2) and its exact REF-DO.
 type Rule struct {
-	Bytes []byte
-	RefDO []byte
-	Key   RuleKey
+	Bytes    []byte
+	RefDO    []byte
+	Key      RuleKey
+	APDURule []byte
 }
 
 func (r Rule) Identifier() string {
 	digest := sha256.Sum256(r.Bytes)
 	return hex.EncodeToString(digest[:8])
+}
+
+// IsCatchAll reports whether the rule's REF-DO carries the zero-length
+// AID-REF-DO that matches every SE applet.
+func (r Rule) IsCatchAll() bool {
+	return len(r.Key.AID) == 0
+}
+
+// GrantsAccess reports whether the rule's APDU-AR-DO grants any access. Only
+// the generic never-allowed rule (D0 01 00) grants nothing; the generic
+// always-allowed rule and every APDU filter list permit at least one command.
+func (r Rule) GrantsAccess() bool {
+	return !(len(r.APDURule) == 1 && r.APDURule[0] == 0x00)
 }
 
 type CatalogSnapshot struct {
@@ -80,8 +94,11 @@ func ParseRule(input []byte) (Rule, error) {
 	if err != nil {
 		return Rule{}, fmt.Errorf("AID-REF-DO: %w", err)
 	}
-	if aidTag != 0x4F || len(aid) < 5 || len(aid) > 16 {
-		return Rule{}, fmt.Errorf("AID-REF-DO must be tag 4F with length 5..16, got tag %02X length %d", aidTag, len(aid))
+	// A zero-length AID-REF-DO is the SEAC catch-all reference matching every SE
+	// applet. It is a valid store shape; whether a catch-all may grant access is
+	// a host policy decision enforced when a plan is built, not here.
+	if aidTag != 0x4F || (len(aid) != 0 && (len(aid) < 5 || len(aid) > 16)) {
+		return Rule{}, fmt.Errorf("AID-REF-DO must be tag 4F with length 0 or 5..16, got tag %02X length %d", aidTag, len(aid))
 	}
 	deviceTag, device, deviceEnd, err := readTLV(refValue, cursor)
 	if err != nil {
@@ -118,8 +135,9 @@ func ParseRule(input []byte) (Rule, error) {
 
 	refDoBytes := append([]byte(nil), value[:refEnd]...)
 	return Rule{
-		Bytes: append([]byte(nil), input...),
-		RefDO: refDoBytes,
+		Bytes:    append([]byte(nil), input...),
+		RefDO:    refDoBytes,
+		APDURule: append([]byte(nil), apduRule...),
 		Key: RuleKey{
 			AID:         append([]byte(nil), aid...),
 			DeviceAppID: append([]byte(nil), device...),

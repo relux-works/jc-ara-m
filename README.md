@@ -101,6 +101,17 @@ go run ./cmd/aram-provisioner reconcile \
   --credentials /secure/sd-credentials.json
 ```
 
+### Catch-all guard
+
+The applet stores the SEAC catch-all reference — a zero-length `AID-REF-DO`
+(`4F 00`), matching every SE applet — like any other exact key. The policy
+question of whether such a rule may *grant* access is answered on the host,
+where it is reviewable and shows up in a manifest diff: `plan` and `reconcile`
+refuse a desired rule with a zero-length AID whose `AR-DO` grants anything
+(`D0 01 01` or an APDU filter list), naming the offending rule, unless
+`--allow-catch-all` is passed. A catch-all *deny* (`D0 01 00`) needs no flag,
+and an already-installed catch-all can always be diffed away without one.
+
 The execution path opens one authenticated `gp-t0-helper secure-apdu` session,
 enters `INSTALL [for personalization]`, and sends the deterministic N-command
 manifest. If the process or transport fails, the command reports unknown state;
@@ -179,7 +190,7 @@ The implementation accepts the GlobalPlatform proprietary CLA ranges
 FF40 <length>                         Response-ALL-AR-DO
   E2 <length>                         REF-AR-DO
     E1 <length>                       REF-DO
-      4F <5..16> <target applet AID>  AID-REF-DO
+      4F <0|5..16> <target applet AID> AID-REF-DO
       C1 <0|20|32> <DeviceAppID>      DeviceAppID-REF-DO
     E3 <length>                       AR-DO
       D0 <length> <rule>              APDU-AR-DO       (mandatory)
@@ -192,6 +203,12 @@ member. Anything else — `DB` before `D0`, a `DB` length other than 8, a repeat
 `DB`, a `DB` without `D0`, or trailing bytes after `DB` — is rejected with
 `6A80` and changes neither the catalog nor the refresh tag. `NFC-AR-DO` (`D1`)
 remains out of this profile.
+
+A zero-length `4F` is the SEAC catch-all reference and is stored, replaced, and
+deleted through its exact `REF-DO` like any other key; sub-AID lengths 1..4
+remain `6A80`. The `F1` delete-by-AID selector still requires a real 5..16-byte
+AID, because a zero-length selector would be an ambiguous second spelling of
+the empty delete-all value.
 
 For the phase-1 permissive rule:
 
@@ -373,8 +390,9 @@ The jCardSim suite proves:
 - corruption of every inactive spare remains unreachable and a later upsert
   safely overwrites one spare;
 - SHA-1 and SHA-256 certificate-bound keys coexist;
-- zero-length AIDs are rejected with `6A80` for both `F0` upsert and exact
-  `REF-DO` `F1` delete without changing catalog metadata;
+- the zero-length-AID catch-all is stored, replaced in place, and deleted by its
+  exact `REF-DO`, while sub-AID lengths 1..4 and a zero-length `F1` AID selector
+  are rejected with `6A80` without changing catalog metadata;
 - malformed and unsupported personalization do not clobber existing state.
 
 jCardSim 3.0.5.9 tracks transaction depth but does not journal array writes, so

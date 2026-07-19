@@ -70,7 +70,10 @@ The active catalog has these invariants:
 The first multi-rule release remains deliberately smaller than full SEAC v1.1:
 
 - one complete short-APDU `REF-AR-DO` per `F0`, maximum 96 bytes including `E2`;
-- `AID-REF-DO` length 5..16 and `DeviceAppID-REF-DO` length 0, 20, or 32;
+- `AID-REF-DO` length 5..16, or 0 for the SEAC catch-all reference, and
+  `DeviceAppID-REF-DO` length 0, 20, or 32. The card stores a catch-all
+  faithfully; refusing to *grant* through one is a host provisioner policy
+  (`--allow-catch-all`), not a card rule;
 - APDU access rules (`D0`) only, as in v0.1.1;
 - no ARA-C aggregation or delegated owner;
 - no promise that a whole N-rule manifest commits atomically.

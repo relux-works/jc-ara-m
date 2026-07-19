@@ -32,6 +32,35 @@ func TestParseRuleAndCatalog(t *testing.T) {
 	}
 }
 
+func TestParseRuleAcceptsZeroLengthCatchAllAID(t *testing.T) {
+	rule, err := ParseRule(buildRule(nil, nil, 0x01))
+	if err != nil {
+		t.Fatalf("ParseRule(catch-all): %v", err)
+	}
+	if !rule.IsCatchAll() || !rule.GrantsAccess() {
+		t.Fatalf("catch-all allow classified as catchAll=%v grants=%v", rule.IsCatchAll(), rule.GrantsAccess())
+	}
+	if !bytes.Equal(rule.RefDO, mustHex(t, "E1044F00C100")) {
+		t.Fatalf("catch-all REF-DO = %X", rule.RefDO)
+	}
+
+	deny, err := ParseRule(buildRule(nil, nil, 0x00))
+	if err != nil {
+		t.Fatalf("ParseRule(catch-all deny): %v", err)
+	}
+	if !deny.IsCatchAll() || deny.GrantsAccess() {
+		t.Fatalf("catch-all deny classified as catchAll=%v grants=%v", deny.IsCatchAll(), deny.GrantsAccess())
+	}
+
+	filtered, err := ParseRule(buildRuleWithAPDURule(nil, nil, bytes.Repeat([]byte{0xA0}, 8)))
+	if err != nil {
+		t.Fatalf("ParseRule(catch-all filter): %v", err)
+	}
+	if !filtered.IsCatchAll() || !filtered.GrantsAccess() {
+		t.Fatalf("catch-all filter classified as catchAll=%v grants=%v", filtered.IsCatchAll(), filtered.GrantsAccess())
+	}
+}
+
 func TestParseRuleRejectsOutOfProfileAndTrailingData(t *testing.T) {
 	valid := testRule(t, "F0000000AA01", "", 0x01)
 
@@ -39,6 +68,9 @@ func TestParseRuleRejectsOutOfProfileAndTrailingData(t *testing.T) {
 		name string
 		data []byte
 	}{
+		{name: "one byte aid", data: buildRule(mustHex(t, "A0"), nil, 0x01)},
+		{name: "two byte aid", data: buildRule(mustHex(t, "A000"), nil, 0x01)},
+		{name: "three byte aid", data: buildRule(mustHex(t, "A00000"), nil, 0x01)},
 		{name: "short aid", data: buildRule(mustHex(t, "A0000000"), nil, 0x01)},
 		{name: "bad device app id", data: buildRule(mustHex(t, "F0000000AA01"), []byte{0x01}, 0x01)},
 		{name: "trailing data", data: append(append([]byte(nil), valid.Bytes...), 0x00)},
@@ -79,11 +111,16 @@ func testRule(t *testing.T, aidHex string, device any, access byte) Rule {
 }
 
 func buildRule(aid, device []byte, access byte) []byte {
+	return buildRuleWithAPDURule(aid, device, []byte{access})
+}
+
+func buildRuleWithAPDURule(aid, device, apduRule []byte) []byte {
 	refValue := append([]byte{0x4F, byte(len(aid))}, aid...)
 	refValue = append(refValue, 0xC1, byte(len(device)))
 	refValue = append(refValue, device...)
 	refDo := append([]byte{0xE1, byte(len(refValue))}, refValue...)
-	arDo := []byte{0xE3, 0x03, 0xD0, 0x01, access}
+	arDoValue := append([]byte{0xD0, byte(len(apduRule))}, apduRule...)
+	arDo := append([]byte{0xE3, byte(len(arDoValue))}, arDoValue...)
 	value := append(refDo, arDo...)
 	return append([]byte{0xE2, byte(len(value))}, value...)
 }
