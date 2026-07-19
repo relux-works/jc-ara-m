@@ -6,7 +6,7 @@ import javacard.framework.ISO7816;
 import javacard.framework.ISOException;
 import org.globalplatform.Application;
 
-/** Java Card APDU adapter for the minimal ARA-M implementation. */
+/** Java Card APDU adapter for the bounded ARA-M implementation. */
 public final class AraMJCApplet extends Applet implements Application {
 
     private static final byte INS_GET_DATA = (byte) 0xCA;
@@ -14,8 +14,11 @@ public final class AraMJCApplet extends Applet implements Application {
 
     private static final byte P1_GET_ALL = (byte) 0xFF;
     private static final byte P2_GET_ALL = (byte) 0x40;
+    private static final byte P2_GET_NEXT = (byte) 0x60;
     private static final byte P1_GET_REFRESH_TAG = (byte) 0xDF;
     private static final byte P2_GET_REFRESH_TAG = (byte) 0x20;
+
+    private static final short MAX_RESPONSE_LENGTH = (short) 256;
 
     private static final byte P1_STORE_LAST_BER_TLV_BLOCK = (byte) 0x90;
     private static final byte P2_STORE_FIRST_BLOCK = (byte) 0x00;
@@ -54,32 +57,74 @@ public final class AraMJCApplet extends Applet implements Application {
         ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
     }
 
+    @Override
+    public void deselect() {
+        logic.clearReadSession();
+    }
+
     /** Receives authenticated STORE DATA from the Security Domain personalization flow. */
     @Override
     public void processData(byte[] data, short offset, short length) {
-        storePersonalizationData(logic, data);
+        storePersonalizationData(logic, data, offset, length);
     }
 
-    static void storePersonalizationData(AraMApplet logic, byte[] apduBuffer) {
-        if (apduBuffer[ISO7816.OFFSET_P1] != P1_STORE_LAST_BER_TLV_BLOCK
-                || apduBuffer[ISO7816.OFFSET_P2] != P2_STORE_FIRST_BLOCK) {
-            ISOException.throwIt(ISO7816.SW_INCORRECT_P1P2);
-        }
-        byte encodedLength = apduBuffer[ISO7816.OFFSET_LC];
-        if (encodedLength < (byte) 0) {
+    static void storePersonalizationData(
+            AraMApplet logic, byte[] apduBuffer, short offset, short length) {
+        if (offset < (short) 0
+                || length < (short) (ISO7816.OFFSET_CDATA + (short) 1)
+                || (short) (offset + length) < offset
+                || (short) (offset + length) > (short) apduBuffer.length) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
-        short dataLength = (short) encodedLength;
-        logic.store(apduBuffer, ISO7816.OFFSET_CDATA, dataLength);
+
+        short instructionOffset = (short) (offset + ISO7816.OFFSET_INS);
+        short p1Offset = (short) (offset + ISO7816.OFFSET_P1);
+        short p2Offset = (short) (offset + ISO7816.OFFSET_P2);
+        short lcOffset = (short) (offset + ISO7816.OFFSET_LC);
+        short cdataOffset = (short) (offset + ISO7816.OFFSET_CDATA);
+
+        if (apduBuffer[instructionOffset] != INS_STORE_DATA) {
+            ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
+        }
+        if (apduBuffer[p1Offset] != P1_STORE_LAST_BER_TLV_BLOCK
+                || apduBuffer[p2Offset] != P2_STORE_FIRST_BLOCK) {
+            ISOException.throwIt(ISO7816.SW_INCORRECT_P1P2);
+        }
+
+        short dataLength = (short) (apduBuffer[lcOffset] & (short) 0x00FF);
+        if (dataLength > (short) 0x7F
+                || (short) (ISO7816.OFFSET_CDATA + dataLength) != length) {
+            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+        logic.store(apduBuffer, cdataOffset, dataLength);
     }
 
     private void processGetData(APDU apdu, byte[] buffer) {
         byte p1 = buffer[ISO7816.OFFSET_P1];
         byte p2 = buffer[ISO7816.OFFSET_P2];
+        if (!isSupportedGetDataObject(p1, p2)) {
+            ISOException.throwIt(ISO7816.SW_INCORRECT_P1P2);
+        }
+
+        short maximumLength = apdu.setOutgoingNoChaining();
+        if (maximumLength > MAX_RESPONSE_LENGTH) {
+            maximumLength = MAX_RESPONSE_LENGTH;
+        }
+        if (maximumLength > (short) buffer.length) {
+            maximumLength = (short) buffer.length;
+        }
+
+        byte logicalChannel = logicalChannel(buffer[ISO7816.OFFSET_CLA]);
         short responseLength;
 
         if (p1 == P1_GET_ALL && p2 == P2_GET_ALL) {
-            responseLength = logic.writeAllRules(buffer, (short) 0);
+            responseLength =
+                    logic.writeAllRules(
+                            buffer, (short) 0, maximumLength, logicalChannel);
+        } else if (p1 == P1_GET_ALL && p2 == P2_GET_NEXT) {
+            responseLength =
+                    logic.writeNextRules(
+                            buffer, (short) 0, maximumLength, logicalChannel);
         } else if (p1 == P1_GET_REFRESH_TAG && p2 == P2_GET_REFRESH_TAG) {
             responseLength = logic.writeRefreshTag(buffer, (short) 0);
         } else {
@@ -87,7 +132,20 @@ public final class AraMJCApplet extends Applet implements Application {
             return;
         }
 
-        apdu.setOutgoingAndSend((short) 0, responseLength);
+        apdu.setOutgoingLength(responseLength);
+        apdu.sendBytes((short) 0, responseLength);
+    }
+
+    private static boolean isSupportedGetDataObject(byte p1, byte p2) {
+        return (p1 == P1_GET_ALL && (p2 == P2_GET_ALL || p2 == P2_GET_NEXT))
+                || (p1 == P1_GET_REFRESH_TAG && p2 == P2_GET_REFRESH_TAG);
+    }
+
+    private static byte logicalChannel(byte cla) {
+        if ((cla & (byte) 0x40) == (byte) 0) {
+            return (byte) (cla & (byte) 0x03);
+        }
+        return (byte) ((cla & (byte) 0x0F) + (byte) 4);
     }
 
     private static boolean isSupportedClass(byte cla) {
