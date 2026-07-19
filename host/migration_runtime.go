@@ -107,33 +107,42 @@ type ToolchainManifest struct {
 	AntJavaCardSHA256 string `json:"ant_javacard_sha256"`
 	PackageAID        string `json:"package_aid"`
 	AppletAID         string `json:"applet_aid"`
+	// ActiveRuleCapacity is the active-rule capacity R this build runs with when
+	// installed the way the provisioner installs it, that is with no capacity TLV
+	// in the installation parameters. MaxActiveRuleCapacity is the build's
+	// compiled ceiling for R.
+	ActiveRuleCapacity    int `json:"active_rule_capacity"`
+	MaxActiveRuleCapacity int `json:"max_active_rule_capacity"`
 }
 
-func (v LocalArtifactVerifier) Verify(ctx context.Context, spec ArtifactSpec) error {
+// LoadPinnedToolchainManifest binds a toolchain manifest to the artifact bytes it
+// claims to describe: the CAP must hash to the pinned digest and the manifest must
+// name that same digest, so neither file can be swapped on its own.
+func LoadPinnedToolchainManifest(spec ArtifactSpec) (ToolchainManifest, error) {
 	if err := validateArtifactSpec(spec); err != nil {
-		return err
+		return ToolchainManifest{}, err
 	}
 	artifact, err := readRegularFile(spec.Path, 32<<20)
 	if err != nil {
-		return err
+		return ToolchainManifest{}, err
 	}
 	digest := sha256.Sum256(artifact)
 	actualDigest := hex.EncodeToString(digest[:])
 	if !strings.EqualFold(actualDigest, spec.SHA256) {
-		return errors.New("artifact SHA-256 does not match the pinned digest")
+		return ToolchainManifest{}, errors.New("artifact SHA-256 does not match the pinned digest")
 	}
 	manifestBytes, err := readRegularFile(spec.ToolchainManifestPath, 1<<20)
 	if err != nil {
-		return err
+		return ToolchainManifest{}, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(manifestBytes))
 	decoder.DisallowUnknownFields()
 	var manifest ToolchainManifest
 	if err := decoder.Decode(&manifest); err != nil {
-		return fmt.Errorf("decode toolchain manifest: %w", err)
+		return ToolchainManifest{}, fmt.Errorf("decode toolchain manifest: %w", err)
 	}
 	if err := requireJSONEOF(decoder); err != nil {
-		return err
+		return ToolchainManifest{}, err
 	}
 	if !strings.EqualFold(manifest.ArtifactSHA256, actualDigest) ||
 		manifest.SourceRef == "" ||
@@ -143,8 +152,33 @@ func (v LocalArtifactVerifier) Verify(ctx context.Context, spec ArtifactSpec) er
 		manifest.JavaCardKit == "" ||
 		!isSHA256(manifest.AntJavaCardSHA256) ||
 		!strings.EqualFold(manifest.PackageAID, spec.PackageAID) ||
-		!strings.EqualFold(manifest.AppletAID, spec.AppletAID) {
-		return errors.New("toolchain manifest is incomplete or refers to a different artifact")
+		!strings.EqualFold(manifest.AppletAID, spec.AppletAID) ||
+		manifest.ActiveRuleCapacity < 1 ||
+		manifest.MaxActiveRuleCapacity < manifest.ActiveRuleCapacity {
+		return ToolchainManifest{}, errors.New("toolchain manifest is incomplete or refers to a different artifact")
+	}
+	return manifest, nil
+}
+
+// VerifyDesiredCapacity refuses a desired-state capacity the pinned artifact
+// cannot honour. Without it the disagreement only surfaces as a mid-rollout 6A84,
+// after mutations have already been applied.
+func VerifyDesiredCapacity(spec ArtifactSpec, desiredCapacity int) error {
+	manifest, err := LoadPinnedToolchainManifest(spec)
+	if err != nil {
+		return fmt.Errorf("pinned artifact %s: %w", spec.Path, err)
+	}
+	if desiredCapacity != manifest.ActiveRuleCapacity {
+		return fmt.Errorf(
+			"desired manifest capacity %d disagrees with the pinned artifact %s, which was built with active-rule capacity %d",
+			desiredCapacity, spec.Path, manifest.ActiveRuleCapacity)
+	}
+	return nil
+}
+
+func (v LocalArtifactVerifier) Verify(ctx context.Context, spec ArtifactSpec) error {
+	if _, err := LoadPinnedToolchainManifest(spec); err != nil {
+		return err
 	}
 	if _, err := readRegularFile(spec.SignaturePath, 1<<20); err != nil {
 		return err

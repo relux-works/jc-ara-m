@@ -11,6 +11,11 @@
 #     --canary-instance-aid A00000015141434D00 \
 #     [--rollback-ref v0.1.1] [--capacity 16] [--dry-run]
 #
+# --capacity is a declaration, not a knob: it must equal the active-rule capacity
+# the release source actually builds with, and the build fails otherwise. Every
+# toolchain manifest records that capacity and the build's compiled ceiling, so
+# the provisioner can refuse a desired manifest that disagrees with the CAP.
+#
 # The output directory must not already contain files. It receives three CAPs,
 # detached signatures, one public key, per-CAP toolchain manifests, an unsigned
 # canary-evidence template (all physical checks false), and a migration-config
@@ -28,7 +33,7 @@ CAPACITY="16"
 DRY_RUN="false"
 
 usage() {
-  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -72,8 +77,43 @@ if [[ ! "$CAPACITY" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
+# The active-rule capacity R is an installation-time parameter, so the honest
+# build property is the capacity a CAP runs with when installed the way the
+# provisioner installs it — with no capacity TLV — plus its compiled ceiling.
+# Reading them out of the applet source is what makes the provisioner's capacity
+# claim verifiable instead of trusted. A source tree with no capacity constants
+# is the pre-multi-rule applet, whose catalog holds exactly one active rule.
+read_source_capacity() {
+  local source_root="$1"
+  local applet="$source_root/jc/src/main/java/works/relux/jcaram/AraMApplet.java"
+  if [ ! -f "$applet" ]; then
+    echo "applet source not found at $applet" >&2
+    return 1
+  fi
+  local default_capacity maximum_capacity
+  default_capacity="$(sed -n 's/.*DEFAULT_ACTIVE_RULE_CAPACITY *= *(short) *\([0-9]\{1,\}\).*/\1/p' "$applet" | head -1)"
+  maximum_capacity="$(sed -n 's/.*MAX_ACTIVE_RULE_CAPACITY *= *(short) *\([0-9]\{1,\}\).*/\1/p' "$applet" | head -1)"
+  if [ -z "$default_capacity" ] && [ -z "$maximum_capacity" ]; then
+    default_capacity="1"
+    maximum_capacity="1"
+  fi
+  if [[ ! "$default_capacity" =~ ^[1-9][0-9]*$ ]] || [[ ! "$maximum_capacity" =~ ^[1-9][0-9]*$ ]] || \
+     (( default_capacity > maximum_capacity )); then
+    echo "unreadable active-rule capacity constants in $applet" >&2
+    return 1
+  fi
+  printf '%s %s\n' "$default_capacity" "$maximum_capacity"
+}
+
+RELEASE_CAPACITY_LINE="$(read_source_capacity "$REPO_ROOT")"
+read -r RELEASE_CAPACITY RELEASE_MAX_CAPACITY <<< "$RELEASE_CAPACITY_LINE"
+if [ "$CAPACITY" != "$RELEASE_CAPACITY" ]; then
+  echo "--capacity $CAPACITY disagrees with the release build's active-rule capacity $RELEASE_CAPACITY" >&2
+  exit 2
+fi
+
 if [ "$DRY_RUN" = "true" ]; then
-  printf '{"ok":true,"dry_run":true,"steps":["build-v0.1.1-rollback","build-multirule-standard","build-alternate-aid-canary","sha256-and-detached-signatures","toolchain-manifests","canary-evidence-template","migration-config-template"],"rollback_ref":"%s","capacity":%s}\n' "$ROLLBACK_REF" "$CAPACITY"
+  printf '{"ok":true,"dry_run":true,"steps":["build-v0.1.1-rollback","build-multirule-standard","build-alternate-aid-canary","sha256-and-detached-signatures","toolchain-manifests","canary-evidence-template","migration-config-template"],"rollback_ref":"%s","capacity":%s,"max_capacity":%s}\n' "$ROLLBACK_REF" "$RELEASE_CAPACITY" "$RELEASE_MAX_CAPACITY"
   exit 0
 fi
 
@@ -135,6 +175,9 @@ RELEASE_DIFF_HASH="$(git -C "$REPO_ROOT" diff --binary HEAD -- jc | shasum -a 25
 JAVA11_HOME_VALUE="${JAVA11_HOME:-/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home}"
 JAVA_VERSION="$($JAVA11_HOME_VALUE/bin/java -version 2>&1 | sed -n '1p' | tr -d '"')"
 
+ROLLBACK_CAPACITY_LINE="$(read_source_capacity "$ROLLBACK_WORKTREE")"
+read -r ROLLBACK_CAPACITY ROLLBACK_MAX_CAPACITY <<< "$ROLLBACK_CAPACITY_LINE"
+
 write_manifest() {
   local cap_path="$1"
   local manifest_path="$2"
@@ -143,15 +186,17 @@ write_manifest() {
   local package_aid="$5"
   local applet_aid="$6"
   local source_diff_sha256="$7"
+  local active_capacity="$8"
+  local max_capacity="$9"
   local digest
   digest="$(shasum -a 256 "$cap_path" | awk '{print $1}')"
-  printf '{\n  "artifact_sha256": "%s",\n  "source_ref": "%s",\n  "source_commit": "%s",\n  "source_diff_sha256": "%s",\n  "java_version": "%s",\n  "javacard_kit": "jc304_kit",\n  "ant_javacard_sha256": "%s",\n  "package_aid": "%s",\n  "applet_aid": "%s"\n}\n' \
-    "$digest" "$source_ref" "$source_commit" "$source_diff_sha256" "$JAVA_VERSION" "$ANT_HASH" "$package_aid" "$applet_aid" > "$manifest_path"
+  printf '{\n  "artifact_sha256": "%s",\n  "source_ref": "%s",\n  "source_commit": "%s",\n  "source_diff_sha256": "%s",\n  "java_version": "%s",\n  "javacard_kit": "jc304_kit",\n  "ant_javacard_sha256": "%s",\n  "package_aid": "%s",\n  "applet_aid": "%s",\n  "active_rule_capacity": %s,\n  "max_active_rule_capacity": %s\n}\n' \
+    "$digest" "$source_ref" "$source_commit" "$source_diff_sha256" "$JAVA_VERSION" "$ANT_HASH" "$package_aid" "$applet_aid" "$active_capacity" "$max_capacity" > "$manifest_path"
 }
 
-write_manifest "$OUTPUT_DIR/jc-ara-m-v0.1.1-rollback.cap" "$OUTPUT_DIR/rollback-toolchain.json" "$ROLLBACK_REF" "$ROLLBACK_COMMIT" "A00000015141434C" "A00000015141434C00" "$ROLLBACK_DIFF_HASH"
-write_manifest "$OUTPUT_DIR/jc-ara-m-multirule-standard.cap" "$OUTPUT_DIR/release-toolchain.json" "working-tree" "$RELEASE_COMMIT" "A00000015141434C" "A00000015141434C00" "$RELEASE_DIFF_HASH"
-write_manifest "$OUTPUT_DIR/jc-ara-m-multirule-canary.cap" "$OUTPUT_DIR/canary-toolchain.json" "working-tree" "$RELEASE_COMMIT" "$CANARY_PACKAGE_AID" "$CANARY_INSTANCE_AID" "$RELEASE_DIFF_HASH"
+write_manifest "$OUTPUT_DIR/jc-ara-m-v0.1.1-rollback.cap" "$OUTPUT_DIR/rollback-toolchain.json" "$ROLLBACK_REF" "$ROLLBACK_COMMIT" "A00000015141434C" "A00000015141434C00" "$ROLLBACK_DIFF_HASH" "$ROLLBACK_CAPACITY" "$ROLLBACK_MAX_CAPACITY"
+write_manifest "$OUTPUT_DIR/jc-ara-m-multirule-standard.cap" "$OUTPUT_DIR/release-toolchain.json" "working-tree" "$RELEASE_COMMIT" "A00000015141434C" "A00000015141434C00" "$RELEASE_DIFF_HASH" "$RELEASE_CAPACITY" "$RELEASE_MAX_CAPACITY"
+write_manifest "$OUTPUT_DIR/jc-ara-m-multirule-canary.cap" "$OUTPUT_DIR/canary-toolchain.json" "working-tree" "$RELEASE_COMMIT" "$CANARY_PACKAGE_AID" "$CANARY_INSTANCE_AID" "$RELEASE_DIFF_HASH" "$RELEASE_CAPACITY" "$RELEASE_MAX_CAPACITY"
 
 ROLLBACK_HASH="$(shasum -a 256 "$OUTPUT_DIR/jc-ara-m-v0.1.1-rollback.cap" | awk '{print $1}')"
 RELEASE_HASH="$(shasum -a 256 "$OUTPUT_DIR/jc-ara-m-multirule-standard.cap" | awk '{print $1}')"

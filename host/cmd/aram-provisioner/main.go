@@ -81,6 +81,7 @@ func runReconcile(args []string) error {
 	gpHelper := flags.String("gp-t0-helper", "gp-t0-helper", "gp-t0-helper executable")
 	execute := flags.Bool("execute", false, "apply the authenticated N-command manifest")
 	allowCatchAll := flags.Bool("allow-catch-all", false, "opt in to a desired rule granting access to every SE applet")
+	migrationConfig := flags.String("migration-config", "", "0600 migration config JSON binding the desired capacity to the pinned release CAP")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -90,6 +91,15 @@ func runReconcile(args []string) error {
 	desired, capacity, err := provisioner.LoadManifest(*desiredPath)
 	if err != nil {
 		return err
+	}
+	if *migrationConfig != "" {
+		config, err := provisioner.LoadMigrationConfig(*migrationConfig)
+		if err != nil {
+			return err
+		}
+		if err := provisioner.VerifyDesiredCapacity(config.Release, capacity); err != nil {
+			return err
+		}
 	}
 	instanceAID, err := decodeAID(*instanceAIDHex)
 	if err != nil {
@@ -130,22 +140,27 @@ func runMigrationPlan(args []string) error {
 	flags := flag.NewFlagSet("migration-plan", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	configPath := flags.String("config", "", "0600 migration config JSON")
+	desiredPath := flags.String("desired", "", "0600 desired-state manifest whose capacity is bound to the pinned release CAP")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *configPath == "" {
-		return errors.New("migration-plan requires --config")
+	if *configPath == "" || *desiredPath == "" {
+		return errors.New("migration-plan requires --config and --desired")
 	}
 	config, err := provisioner.LoadMigrationConfig(*configPath)
 	if err != nil {
 		return err
 	}
-	plan, err := provisioner.PlanMigration(config)
+	_, capacity, err := provisioner.LoadManifest(*desiredPath)
+	if err != nil {
+		return err
+	}
+	plan, err := provisioner.PlanMigrationForDesired(config, capacity)
 	if err != nil {
 		return err
 	}
 	return emit(map[string]any{
-		"ok": true, "dry_run": true, "plan": plan,
+		"ok": true, "dry_run": true, "plan": plan, "capacity": capacity,
 		"required_acknowledgement": provisioner.MaintenanceAcknowledgement(config),
 	})
 }
@@ -165,32 +180,32 @@ func runMigrate(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *configPath == "" {
-		return errors.New("migrate requires --config")
+	if *configPath == "" || *desiredPath == "" {
+		return errors.New("migrate requires --config and --desired")
 	}
 	config, err := provisioner.LoadMigrationConfig(*configPath)
 	if err != nil {
 		return err
 	}
+	desired, capacity, err := provisioner.LoadManifest(*desiredPath)
+	if err != nil {
+		return err
+	}
 	if !*execute {
-		result, err := (provisioner.MigrationExecutor{}).Execute(context.Background(), config, false, "")
+		result, err := (provisioner.MigrationExecutor{DesiredCapacity: capacity}).Execute(context.Background(), config, false, "")
 		if err != nil {
 			return err
 		}
 		return emit(map[string]any{
-			"ok": true, "dry_run": true, "result": result,
+			"ok": true, "dry_run": true, "result": result, "capacity": capacity,
 			"required_acknowledgement": provisioner.MaintenanceAcknowledgement(config),
 		})
 	}
-	if *desiredPath == "" || *credentialsPath == "" || *readerName == "" {
-		return errors.New("migrate --execute requires --desired, --credentials, and --reader")
+	if *credentialsPath == "" || *readerName == "" {
+		return errors.New("migrate --execute requires --credentials and --reader")
 	}
 	if config.ExportPath == "" {
 		return errors.New("migrate --execute requires export_path in migration config")
-	}
-	desired, capacity, err := provisioner.LoadManifest(*desiredPath)
-	if err != nil {
-		return err
 	}
 	credentials, err := provisioner.LoadCredentials(*credentialsPath)
 	if err != nil {
@@ -223,6 +238,7 @@ func runMigrate(args []string) error {
 	result, err := (provisioner.MigrationExecutor{
 		Operations:      operations,
 		RecoveryTimeout: commandTimeout,
+		DesiredCapacity: capacity,
 	}).Execute(ctx, config, true, *acknowledgement)
 	if err != nil {
 		return err
@@ -267,18 +283,23 @@ Commands:
       refused unless --allow-catch-all is passed; a catch-all deny never needs it.
 
   reconcile --desired FILE --reader NAME [--execute --credentials FILE]
-            [--allow-catch-all]
+            [--allow-catch-all] [--migration-config FILE]
       Re-read FF40/FF60 via jc-harness, diff, and optionally send one
       authenticated gp-t0-helper secure-apdu manifest. Re-run after any
-      transport interruption; the command always re-reads/re-diffs.
+      transport interruption; the command always re-reads/re-diffs. With
+      --migration-config the desired capacity is cross-checked against the
+      pinned release CAP before anything is planned.
 
-  migration-plan --config FILE
+  migration-plan --config FILE --desired FILE
       Validate and print the guarded v0.1.1 export/reinstall/import plan plus
-      its rollback branch. Performs no hardware command.
+      its rollback branch. Performs no hardware command. The desired manifest's
+      capacity must equal the capacity the pinned release CAP was built with.
 
-  migrate --config FILE [--execute --ack TOKEN --desired FILE
+  migrate --config FILE --desired FILE [--execute --ack TOKEN
           --credentials FILE --reader NAME]
-      Without --execute, dry-run only. Execution requires the exact printed
+      Without --execute, dry-run only. Both modes cross-check the desired
+      capacity against the pinned release CAP, so a capacity disagreement is
+      refused before any card mutation. Execution requires the exact printed
       maintenance token, pinned signed rollback/canary/release artifacts,
       complete canary evidence, and a secure exported-rule path.
 

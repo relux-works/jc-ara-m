@@ -53,8 +53,8 @@ func TestMigrationPlanIsGuardedAndDefinesRollback(t *testing.T) {
 
 func TestMigrationExecutionRollsBackAfterStandardDeletionFailure(t *testing.T) {
 	operations := &recordingMigrationOps{failAt: MigrationInstallRelease}
-	executor := MigrationExecutor{Operations: operations}
-	config := validMigrationConfig()
+	config, _ := migrationConfigWithPinnedRelease(t, 16, 64)
+	executor := MigrationExecutor{Operations: operations, DesiredCapacity: 16}
 
 	if _, err := executor.Execute(context.Background(), config, true, MaintenanceAcknowledgement(config)); err == nil {
 		t.Fatal("Execute unexpectedly succeeded")
@@ -77,8 +77,8 @@ func TestMigrationExecutionRollsBackAfterStandardDeletionFailure(t *testing.T) {
 func TestMigrationExecutionUsesIndependentBoundedContextForRollback(t *testing.T) {
 	forwardContext, cancelForward := context.WithCancel(context.Background())
 	operations := &cancelingMigrationOps{cancelForward: cancelForward}
-	executor := MigrationExecutor{Operations: operations, RecoveryTimeout: time.Second}
-	config := validMigrationConfig()
+	config, _ := migrationConfigWithPinnedRelease(t, 16, 64)
+	executor := MigrationExecutor{Operations: operations, RecoveryTimeout: time.Second, DesiredCapacity: 16}
 
 	result, err := executor.Execute(forwardContext, config, true, MaintenanceAcknowledgement(config))
 	if err == nil {
@@ -110,8 +110,9 @@ func TestMigrationExecutionUsesIndependentBoundedContextForRollback(t *testing.T
 
 func TestMigrationDryRunHasNoSideEffects(t *testing.T) {
 	operations := &recordingMigrationOps{}
-	executor := MigrationExecutor{Operations: operations}
-	result, err := executor.Execute(context.Background(), validMigrationConfig(), false, "")
+	config, _ := migrationConfigWithPinnedRelease(t, 16, 64)
+	executor := MigrationExecutor{Operations: operations, DesiredCapacity: 16}
+	result, err := executor.Execute(context.Background(), config, false, "")
 	if err != nil {
 		t.Fatalf("Execute dry-run: %v", err)
 	}

@@ -21,15 +21,17 @@ func TestArtifactVerifierChecksDigestManifestAndSignature(t *testing.T) {
 	digestHex := hex.EncodeToString(digest[:])
 	manifestPath := filepath.Join(directory, "toolchain.json")
 	manifest := ToolchainManifest{
-		ArtifactSHA256:    digestHex,
-		SourceRef:         "v0.1.1",
-		SourceCommit:      "10b8f42",
-		SourceDiffSHA256:  stringsOf('d', 64),
-		JavaVersion:       "11",
-		JavaCardKit:       "jc304_kit",
-		AntJavaCardSHA256: stringsOf('a', 64),
-		PackageAID:        StandardPackageAIDHex,
-		AppletAID:         StandardInstanceAIDHex,
+		ArtifactSHA256:        digestHex,
+		SourceRef:             "v0.1.1",
+		SourceCommit:          "10b8f42",
+		SourceDiffSHA256:      stringsOf('d', 64),
+		JavaVersion:           "11",
+		JavaCardKit:           "jc304_kit",
+		AntJavaCardSHA256:     stringsOf('a', 64),
+		PackageAID:            StandardPackageAIDHex,
+		AppletAID:             StandardInstanceAIDHex,
+		ActiveRuleCapacity:    16,
+		MaxActiveRuleCapacity: 64,
 	}
 	manifestJSON, _ := json.Marshal(manifest)
 	if err := os.WriteFile(manifestPath, manifestJSON, 0o600); err != nil {

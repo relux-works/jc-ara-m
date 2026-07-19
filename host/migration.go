@@ -84,6 +84,21 @@ func PlanMigration(config MigrationConfig) (MigrationPlan, error) {
 	}, nil
 }
 
+// PlanMigrationForDesired plans the migration for a concrete desired-state
+// capacity. The capacity claim is cross-checked against the pinned release CAP
+// before any stage is returned, so a manifest that disagrees with the artifact it
+// will run on is refused on the planning path, dry-run included.
+func PlanMigrationForDesired(config MigrationConfig, desiredCapacity int) (MigrationPlan, error) {
+	plan, err := PlanMigration(config)
+	if err != nil {
+		return MigrationPlan{}, err
+	}
+	if err := VerifyDesiredCapacity(config.Release, desiredCapacity); err != nil {
+		return MigrationPlan{}, err
+	}
+	return plan, nil
+}
+
 func LoadMigrationConfig(path string) (MigrationConfig, error) {
 	file, err := openSecureInput(path)
 	if err != nil {
@@ -204,6 +219,9 @@ type MigrationOperations interface {
 type MigrationExecutor struct {
 	Operations      MigrationOperations
 	RecoveryTimeout time.Duration
+	// DesiredCapacity is the capacity declared by the desired-state manifest. It
+	// is cross-checked against the pinned release CAP on the planning path.
+	DesiredCapacity int
 }
 
 type MigrationResult struct {
@@ -213,7 +231,7 @@ type MigrationResult struct {
 }
 
 func (e MigrationExecutor) Execute(ctx context.Context, config MigrationConfig, execute bool, acknowledgement string) (MigrationResult, error) {
-	plan, err := PlanMigration(config)
+	plan, err := PlanMigrationForDesired(config, e.DesiredCapacity)
 	if err != nil {
 		return MigrationResult{}, err
 	}

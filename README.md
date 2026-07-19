@@ -164,14 +164,24 @@ The guarded runbook is inspectable without hardware:
 ```bash
 cd host
 go run ./cmd/aram-provisioner migration-plan \
-  --config /secure/migration-config.json
+  --config /secure/migration-config.json \
+  --desired /secure/desired.json
 ```
 
 Execution is rejected until rollback/canary/release digests, detached
 signatures, toolchain manifests, and every canary evidence check match the
 configured capacity. Each toolchain manifest binds the CAP digest, source
-commit plus working-tree diff digest, Java/Java Card toolchain identity, and
-expected package/applet AIDs. The forward path exports the current v0.1.1 rule to a
+commit plus working-tree diff digest, Java/Java Card toolchain identity,
+expected package/applet AIDs, and the active-rule capacity `R` the CAP was
+built with together with its compiled ceiling.
+
+The capacity in a desired-state manifest is a claim about the applet that will
+enforce it, so both `migration-plan` and `migrate` require `--desired` and
+refuse to produce a plan when that claim disagrees with the pinned release CAP.
+The check runs on the planning path, so a dry run catches the disagreement
+before any card is mutated; without it the same mismatch only appears as a
+mid-rollout `6A84`. `reconcile --migration-config FILE` applies the same binding
+to steady-state runs. The forward path exports the current v0.1.1 rule to a
 0600 task-scoped file, deletes/installs through authenticated
 `gp-t0-helper delete-if-present`/`install`, restores the exported rule first,
 then reconciles the full desired catalog. Any failure after standard-package
