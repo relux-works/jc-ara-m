@@ -17,10 +17,11 @@ a roadmap, not an implementation claim, CAP build, or CARD#5 mutation.
 - **Do not regress the proven boundary:** atomic rule-plus-refresh publication,
   authenticated-only provisioning, raw-STORE denial, and a small predictable
   footprint remain release constraints.
-- **Evidence still required:** acceptance of the full deterministic SHA-256
-  simulator-vector contract, immutable CAP provenance, and physical CARD#5
-  capacity/commit evidence. The current WP1 fixture is useful partial coverage,
-  not proof that every P1 SHA-256 assertion has been exercised.
+- **Evidence still required:** immutable CAP provenance and physical CARD#5
+  capacity/commit evidence. The deterministic SHA-256 simulator-vector contract
+  is no longer outstanding: `Sha256VectorTest` now carries the dedicated store,
+  exact-readback, keyed-replacement, refresh-change, coexistence/delete, and
+  malformed-input assertions that the earlier WP1 fixture only partially covered.
 - **Bounded intentionally:** `FF50`, `F2`, `E7`, raw STORE/locks, and full
   SEAC v1.1 conformance are not opportunistic additions; ARA-C is deferred for
   a concrete delegated-owner requirement.
@@ -53,7 +54,7 @@ That design is authoritative for the implementation shape:
 
 | Work package | Board task | Roadmap responsibility | Board status at this fact-check |
 | --- | --- | --- | --- |
-| WP1 — catalog and atomic mutation | `TASK-260719-166x32` | Bounded `R + 1` arena, exact-key `F0` upsert, required `F1` deletes, refresh/revision publication. It establishes the synthetic SHA-256 fixture but does not by itself close the P1 vector acceptance contract. | Accepted |
+| WP1 — catalog and atomic mutation | `TASK-260719-166x32` | Bounded `R + 1` arena, exact-key `F0` upsert, required `F1` deletes, refresh/revision publication. It established the synthetic SHA-256 fixture; the P1 vector acceptance contract was closed separately by `Sha256VectorTest` (ledger C9). | Accepted |
 | WP2 — streaming retrieval | `TASK-260719-xzwuv5` | `FF40` full-length encoding and `FF60` continuation, with channel/revision safety. | Accepted |
 | WP3 — authenticated OTA and migration | `TASK-260719-3g38q3` | Desired-state reconciliation, exact CAP provenance, canary/rollback controls. | Ready for review |
 | WP4 — physical acceptance | `TASK-260719-109lj8` | CARD#5 capacity/transaction measurement, canary, migration, Android allow/deny, and rollback evidence. | Backlog |
@@ -73,7 +74,7 @@ The terms below are normative for this roadmap:
 | P0 | Rule update and delete | This is the other explicit product requirement. `F0` is an exact-`REF-DO` idempotent upsert; `F1` deletes all, by AID, or by exact `REF-DO`. A policy whose key changes is a fail-closed `F1` then `F0` reconciliation. | WP1 proves mutation/refresh atomicity, no-op retry, capacity, and all required delete forms; WP3 performs desired-state reconciliation. |
 | P0 | `GET DATA [Next]` (`FF60`) | The one-slot response currently fits one short APDU; a multi-rule catalog does not. AOSP consumes the advertised `FF40` length and continues with `FF60` until complete. | WP2 covers BER lengths, chunking, no-session and mutation-invalidation errors, and no `61xx` substitution. |
 | P0 release gate | Exact CARD#5 EEPROM and transaction-capacity measurement | Formulae and CAP component sizes are only lower-bound/proxy evidence; they cannot prove physical capacity or Java Card journal headroom. | WP4 records selected `R`, CAP identity/toolchain manifest, and worst-case add/update/delete-all in both owned and caller-owned transaction paths. No multi-rule CARD#5 release without this evidence. |
-| P1 | Deterministic SHA-256 certificate-bound simulator vector | CARD#5/Android acceptance already proves SHA-256 behavior. WP1 now contains a synthetic `C1 20` fixture and proves SHA-1/SHA-256 exact-key coexistence, but it does not yet document dedicated SHA-256 same-key replacement, refresh-change, and malformed-value assertions. Keep this PULL-IN open until those assertions run green while retaining SHA-1 interoperability coverage. | Extend the WP1 test surface (or its focused follow-up before release) with synthetic `C1 20` store, exact readback, replacement, refresh-change, and malformed-input assertions. Do not use the hardware proof as a substitute for this deterministic codec regression. |
+| P1 — **DELIVERED** | Deterministic SHA-256 certificate-bound simulator vector | CARD#5/Android acceptance already proves SHA-256 behavior, but the hardware proof was never accepted as a substitute for a deterministic codec regression. WP1's synthetic `C1 20` fixture and SHA-1/SHA-256 exact-key coexistence were useful partial coverage only. | **Closed.** `Sha256VectorTest` (8 tests) adds synthetic `C1 20` store, byte-exact readback, exact-`REF-DO` replacement, refresh-change-per-mutation, SHA-1/SHA-256 coexistence with individual deletion, and malformed-input rejection without mutation. SHA-1 interoperability coverage retained. See ledger C9. |
 | P1 | Immutable CAP release and rollback provenance | A source tag alone did not reproduce the historical installed archive digest. This is a release-engineering gap, not a reason to weaken the hardware proof. | WP3 retains the exact new and rollback CAPs, digests/signatures, and toolchain manifests before any standard-AID migration; WP4 consumes them. |
 
 ## Comparison decision ledger
@@ -92,7 +93,7 @@ traceability; closed evidence is listed separately in the next section.
 | C6 | No `E7` Block-DO multi-session transfer. | **WONT-DO** | Every supported `REF-AR-DO` fits one short `F0`; N-rule OTA uses resumable, authenticated commands rather than a transfer buffer. | Sections 2.2, 4.1, 7, 9. |
 | C7 | No ARA-C/delegated-owner configuration (`F6`, `F7`, `F8`). | **DEFER** | Reopen only for a signed requirement to install/register ARA-C owners or aggregate multiple independently owned rule sets. Current product has one centrally managed ARA-M and authenticated Security Domain path. | Sections 2.2 and 9; no WP in this release. |
 | C8 | Sysmocom offers a raw STORE path plus proprietary lock controls. | **WONT-DO** | The safer jc-ara-m boundary is raw mutation permanently denied; a mutable lock around an enabled raw path is not an equivalent security model. | Sections 2.1, 4.1, 9. |
-| C9 | No deterministic SHA-256 simulator regression despite hardware/Android proof. | **PULL-IN** | **P1.** WP1 now has a synthetic non-secret `C1 20` fixture and exact-key coexistence coverage. Keep the decision open until dedicated SHA-256 store/readback/replacement/refresh/malformed-input assertions run green; retain the accepted physical proof as a separate evidence layer. | Section 11; WP1 test surface or focused follow-up. |
+| C9 | No deterministic SHA-256 simulator regression despite hardware/Android proof. | **DONE** | **Closed.** New `Sha256VectorTest` carries the dedicated jCardSim contract on a synthetic non-secret `C1 20` DeviceAppID: `sha256DeviceAppIdRuleIsStoredAndReadBackByteExact` (store plus byte-exact 32-octet readback through `FF40`), `sha256RuleIsReplacedByItsExactRefDoWithoutTouchingNeighbours` (keyed replacement, neighbours untouched, one revision step), `aSha1RuleForTheSameAidIsNotReplacedByItsSha256Sibling` (differing hash width is a distinct key, not an overwrite), `everyVisibleSha256MutationPublishesANewRefreshTag` (store/replace/delete each publish a new `DF20`, byte-identical retry does not), `sha1AndSha256RulesForOneAidAreIndividuallyDeletable` (`C1 14` and `C1 20` coexist under one AID and delete independently), and the rejection trio `offWidthDeviceAppIdHashReturns6A80WithoutMutation`, `c1LengthMismatchOnSha256HashReturns6A80WithoutMutation`, `truncatedSha256RuleReturns6A80WithoutMutation` (31/33-octet widths, `C1` length-vs-value mismatch in both directions, and truncated hashes all return `6A80` with catalog, refresh tag, and revision unchanged). `AraMAppletTest`'s pre-existing `sha1AndSha256ExactReferenceKeysCanCoexist` stays as-is. The accepted CARD#5/Android physical grant-and-deny proof remains a separate evidence layer. | Section 11; WP1 test surface. |
 | C10 | Exact installed CARD#5 EEPROM allocation and transaction headroom are unknown. | **PULL-IN** | **P0 release gate.** Do not turn lower-bound arithmetic into a hardware claim; measure physical limits at the selected `R`. | Sections 3.3, 8.2, 11; WP4. |
 | C11 | Exact installed CAP was not retained as an immutable release artifact. | **PULL-IN** | **P1.** Produce/retain signed digest-bound CAPs and toolchain manifests for both migration and rollback. | Sections 8.2-8.4, 11; WP3, WP4. |
 | C12 | Current profile is not complete SEAC v1.1 (including APDU-only rules, no NFC AR-DO, no delegated ARA-C). | **WONT-DO** | Keep a named bounded profile. Reopen only with a concrete NFC rule or delegated-owner product requirement, followed by a new architecture decision; do not claim full SEAC v1.1 conformance. | Sections 2.2 and 9. |
@@ -111,9 +112,9 @@ here to prevent a future comparison from reopening them by accident.
 ## Implementation and release sequencing
 
 1. **WP1 is accepted** as the invariant-bearing layer: bounded catalog,
-   exact-key identity, F0/F1, and transaction-safe refresh publication. Keep
-   its SHA-256 P1 acceptance criteria explicitly open until the dedicated
-   vector assertions above are present and green.
+   exact-key identity, F0/F1, and transaction-safe refresh publication. Its
+   SHA-256 P1 acceptance criteria are now satisfied: the dedicated vector
+   assertions above are present and green in `Sha256VectorTest`.
 2. Deliver **WP2** on top of the accepted catalog. Treat `FF60` as the SEAC/AOSP
    continuation contract, not ISO `61xx` chaining.
 3. Deliver **WP3** only through the existing authenticated Security Domain
