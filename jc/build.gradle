@@ -38,11 +38,35 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // Third-party SEAC decoder used purely as a test oracle for our FF40/FF60
+    // stream. Test scope only: the CAP is converted from src/main/java plus the
+    // globalPlatformApi configuration, so this never reaches the card.
+    testImplementation 'com.github.martinpaljak:globalplatformpro:19.06.16'
 }
 
 tasks.register('prepareCapDependencies', Copy) {
     from configurations.globalPlatformApi
     into layout.buildDirectory.dir('cap-dependencies')
+}
+
+// The CAP is converted from src/main/java plus whatever prepareCapDependencies stages,
+// so a test-scope dependency can never reach the card. This gate makes that structural:
+// adding a test oracle (or anything else) to globalPlatformApi fails the build.
+tasks.register('verifyCapDependenciesAreMinimal') {
+    def capJars = configurations.globalPlatformApi
+    inputs.files capJars
+    doLast {
+        def names = capJars.files.collect { it.name }.sort()
+        if (names != ['javacard-1.1.jar']) {
+            throw new GradleException(
+                    "The CAP import set must stay the GlobalPlatform API alone, was ${names}")
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn 'verifyCapDependenciesAreMinimal'
 }
 
 test {
