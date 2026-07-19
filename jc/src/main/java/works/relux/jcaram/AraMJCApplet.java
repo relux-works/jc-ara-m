@@ -20,8 +20,7 @@ public final class AraMJCApplet extends Applet implements Application {
 
     private static final short MAX_RESPONSE_LENGTH = (short) 256;
 
-    private static final byte P1_STORE_LAST_BER_TLV_BLOCK = (byte) 0x90;
-    private static final byte P2_STORE_FIRST_BLOCK = (byte) 0x00;
+    private static final short MAX_STORE_DATA_FIELD_LENGTH = (short) 0x7F;
 
     private final AraMApplet logic;
 
@@ -62,41 +61,33 @@ public final class AraMJCApplet extends Applet implements Application {
         logic.clearReadSession();
     }
 
-    /** Receives authenticated STORE DATA from the Security Domain personalization flow. */
+    /**
+     * Receives authenticated STORE DATA from the Security Domain personalization flow.
+     *
+     * <p>The Security Domain forwards only the STORE DATA command data field: {@code data}
+     * may be the underlying APDU buffer, with {@code offset} at the first data byte and
+     * {@code length} equal to Lc. Physically confirmed on CARD#5, whose SD passes
+     * {@code offset == ISO7816.OFFSET_CDATA}. The APDU header (CLA/INS/P1/P2/Lc) is
+     * consumed by the SD and is never visible here, so block-chaining P1 cannot be
+     * checked; a fragment of a chained command fails command-DO parsing without mutation.
+     */
     @Override
     public void processData(byte[] data, short offset, short length) {
         storePersonalizationData(logic, data, offset, length);
     }
 
     static void storePersonalizationData(
-            AraMApplet logic, byte[] apduBuffer, short offset, short length) {
+            AraMApplet logic, byte[] data, short offset, short length) {
         if (offset < (short) 0
-                || length < (short) (ISO7816.OFFSET_CDATA + (short) 1)
+                || length < (short) 1
                 || (short) (offset + length) < offset
-                || (short) (offset + length) > (short) apduBuffer.length) {
+                || (short) (offset + length) > (short) data.length) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
-
-        short instructionOffset = (short) (offset + ISO7816.OFFSET_INS);
-        short p1Offset = (short) (offset + ISO7816.OFFSET_P1);
-        short p2Offset = (short) (offset + ISO7816.OFFSET_P2);
-        short lcOffset = (short) (offset + ISO7816.OFFSET_LC);
-        short cdataOffset = (short) (offset + ISO7816.OFFSET_CDATA);
-
-        if (apduBuffer[instructionOffset] != INS_STORE_DATA) {
-            ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
-        }
-        if (apduBuffer[p1Offset] != P1_STORE_LAST_BER_TLV_BLOCK
-                || apduBuffer[p2Offset] != P2_STORE_FIRST_BLOCK) {
-            ISOException.throwIt(ISO7816.SW_INCORRECT_P1P2);
-        }
-
-        short dataLength = (short) (apduBuffer[lcOffset] & (short) 0x00FF);
-        if (dataLength > (short) 0x7F
-                || (short) (ISO7816.OFFSET_CDATA + dataLength) != length) {
+        if (length > MAX_STORE_DATA_FIELD_LENGTH) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
-        logic.store(apduBuffer, cdataOffset, dataLength);
+        logic.store(data, offset, length);
     }
 
     private void processGetData(APDU apdu, byte[] buffer) {

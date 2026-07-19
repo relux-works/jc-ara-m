@@ -407,13 +407,38 @@ final class AraMAppletTest {
 
     @Test
     void authenticatedCallbackHonorsNonZeroBufferOffset() {
-        byte[] command = storeCommand(upsert(PERMISSIVE_ALLOW_REF_AR_DO));
-        byte[] padded = new byte[command.length + 4];
-        System.arraycopy(command, 0, padded, 2, command.length);
+        byte[] commandDo = upsert(PERMISSIVE_ALLOW_REF_AR_DO);
+        byte[] padded = new byte[commandDo.length + 4];
+        System.arraycopy(commandDo, 0, padded, 2, commandDo.length);
 
-        application.processData(padded, (short) 2, (short) command.length);
+        application.processData(padded, (short) 2, (short) commandDo.length);
 
         assertArrayEquals(allRules(PERMISSIVE_ALLOW_REF_AR_DO), getAllRules());
+    }
+
+    @Test
+    void authenticatedCallbackParsesDataFieldFramingFromSecurityDomain() {
+        // CARD#5's Security Domain hands processData the raw APDU buffer with
+        // offset pointing at the STORE DATA data field and length equal to Lc.
+        byte[] commandDo = upsert(PERMISSIVE_ALLOW_REF_AR_DO);
+        byte[] apdu = storeCommand(commandDo);
+
+        application.processData(apdu, (short) 5, (short) commandDo.length);
+
+        assertArrayEquals(allRules(PERMISSIVE_ALLOW_REF_AR_DO), getAllRules());
+    }
+
+    @Test
+    void authenticatedCallbackRejectsFullApduFramingWithoutMutation() {
+        byte[] apdu = storeCommand(upsert(PERMISSIVE_ALLOW_REF_AR_DO));
+
+        ISOException rejected =
+                assertThrows(
+                        ISOException.class,
+                        () -> application.processData(apdu, (short) 0, (short) apdu.length));
+
+        assertEquals(0x6981, rejected.getReason() & 0xFFFF);
+        assertArrayEquals(allRules(), getAllRules());
     }
 
     @Test
@@ -514,8 +539,7 @@ final class AraMAppletTest {
     }
 
     private void personalizeCommand(byte[] commandDo) {
-        byte[] command = storeCommand(commandDo);
-        application.processData(command, (short) 0, (short) command.length);
+        application.processData(commandDo, (short) 0, (short) commandDo.length);
     }
 
     private static byte[] upsert(byte[] refArDo) {
