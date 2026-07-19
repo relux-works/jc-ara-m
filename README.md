@@ -182,8 +182,16 @@ FF40 <length>                         Response-ALL-AR-DO
       4F <5..16> <target applet AID>  AID-REF-DO
       C1 <0|20|32> <DeviceAppID>      DeviceAppID-REF-DO
     E3 <length>                       AR-DO
-      D0 <length> <rule>              APDU-AR-DO
+      D0 <length> <rule>              APDU-AR-DO       (mandatory)
+      DB 08 <8-byte permission mask>  PERM-AR-DO       (optional)
 ```
+
+`AR-DO` members are validated in SEAC member order. `D0` is mandatory and comes
+first; `DB` is optional, must carry exactly eight bytes, and must be the last
+member. Anything else — `DB` before `D0`, a `DB` length other than 8, a repeated
+`DB`, a `DB` without `D0`, or trailing bytes after `DB` — is rejected with
+`6A80` and changes neither the catalog nor the refresh tag. `NFC-AR-DO` (`D1`)
+remains out of this profile.
 
 For the phase-1 permissive rule:
 
@@ -287,6 +295,26 @@ The phase-2 SHA-1 certificate-bound shape replaces `C1 00` with
 
 For SHA-256, use `C1 20 <32-byte hash>`; the corresponding enclosing lengths
 are `E1 2A`, `E2 31`, `F0 33`, and APDU `Lc=35`.
+
+A rule may also carry the optional `PERM-AR-DO` after its `APDU-AR-DO`. This is
+the Android carrier-privilege rule shape — a SHA-256 signing-certificate key
+plus an eight-byte permission mask:
+
+```text
+80 E2 90 00 3F
+  F0 3D
+    E2 3B
+      E1 2A
+        4F 06 F0000000AA01
+        C1 20 <32-byte SHA-256 certificate hash>
+      E3 0D
+        D0 01 01
+        DB 08 <8-byte permission mask>
+```
+
+That rule serialises to 61 bytes. The worst shape this profile accepts — a
+16-byte AID, a SHA-256 hash, two 8-byte APDU filter/mask pairs, and a
+`PERM-AR-DO` — serialises to 86 bytes, still inside the 96-byte record.
 
 Authenticated deletion uses these `F1` command forms:
 

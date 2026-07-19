@@ -222,8 +222,8 @@ session, but each rule is a separate STORE DATA command.
 Identity is the exact parsed `REF-DO`: AID length/value plus DeviceAppID
 length/value.
 
-1. Validate the complete `F0`/`E2`/`E1`/`E3`/`D0` structure before any
-   persistent write.
+1. Validate the complete `F0`/`E2`/`E1`/`E3`/`D0` structure, plus the optional
+   `DB` `PERM-AR-DO` member, before any persistent write.
 2. If no active record has the key, add it if capacity permits.
 3. If one active record has the key, the APDU-only profile replaces its `D0`
    rule with the supplied rule. This is the applicable SEAC overwrite case for
@@ -510,6 +510,7 @@ The state transitions are shown in
 | sysmocom `A1`/`A2` raw-path lock | **Skip** | Raw mutation is never enabled, so a mutable lock state is unnecessary. |
 | Direct raw STORE DATA | **Keep denied** | Preserve the v0.1.1 security boundary and CARD#5 evidence. |
 | NFC AR-DO | **Skip for this release** | Current requirement and proven codec are APDU access. Adding NFC changes validation/merge/delete semantics and needs its own requirement. |
+| `DB` PERM-AR-DO | **Adopt** | Validated optional `AR-DO` member in SEAC order after the mandatory `D0`: exactly 8 bytes, at most once, last. Unlocks the Android carrier-privilege rule shape (61B) with no capacity change; worst accepted shape is 86B against the 96B record. |
 
 This is a named bounded profile, not a claim of complete SEAC v1.1
 conformance.
@@ -545,6 +546,9 @@ implementation tasks in this scope.
 - storage invariants for empty, add, exact update, identical retry, delete by
   AID, delete by REF-DO, and delete all;
 - SHA-1 and SHA-256 keys, duplicate prevention, capacity `6A84`;
+- `PERM-AR-DO` store/exact-key readback/replace/`FF40` serialization, plus
+  `6A80` without mutation for `DB` before `D0`, a `DB` length other than 8, a
+  duplicate `DB`, a `DB` without `D0`, and trailing bytes after `DB`;
 - injected failure before staging, during owned-path inactive write, during
   caller-owned atomic candidate write, before metadata publication, and during
   transaction abort leaves the old catalog/tag;

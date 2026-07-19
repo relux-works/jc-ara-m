@@ -29,6 +29,9 @@ final class AraMAppletTest {
     private static final byte[] APPLET_AID = hex("F0000000AA01");
     private static final byte[] OTHER_APPLET_AID = hex("F0000000BB01");
 
+    private static final byte[] APDU_ALLOW_AR_DO_VALUE = hex("D00101");
+    private static final byte[] APDU_DENY_AR_DO_VALUE = hex("D00100");
+
     private static final byte[] PERMISSIVE_ALLOW_REF_AR_DO =
             hex("E211E10A4F06F0000000AA01C100E303D00101");
     private static final byte[] PERMISSIVE_DENY_REF_AR_DO =
@@ -50,6 +53,18 @@ final class AraMAppletTest {
                             + "E303D00101");
     private static final byte[] OTHER_APP_ALLOW_REF_AR_DO =
             ruleFor(OTHER_APPLET_AID, new byte[0], true);
+
+    private static final byte[] SHA256_CERT_HASH =
+            hex(
+                    "000102030405060708090A0B0C0D0E0F"
+                            + "101112131415161718191A1B1C1D1E1F");
+    private static final byte[] CARRIER_PRIVILEGE_MASK = hex("0000000000000001");
+    private static final byte[] OTHER_PERMISSION_MASK = hex("00000000000000FF");
+    private static final byte[] CARRIER_PRIVILEGE_REF_AR_DO =
+            ruleWithArDoValue(
+                    APPLET_AID,
+                    SHA256_CERT_HASH,
+                    concat(APDU_ALLOW_AR_DO_VALUE, permArDo(CARRIER_PRIVILEGE_MASK)));
 
     private ExposedCardSimulator simulator;
     private AID appletAid;
@@ -498,6 +513,135 @@ final class AraMAppletTest {
     }
 
     @Test
+    void carrierPrivilegeShapedRuleIsStoredAndSerialisedInFf40() {
+        assertEquals(61, CARRIER_PRIVILEGE_REF_AR_DO.length);
+
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+        byte[] refreshBefore = getRefreshTag();
+
+        personalize(CARRIER_PRIVILEGE_REF_AR_DO);
+
+        assertArrayEquals(
+                allRules(PERMISSIVE_ALLOW_REF_AR_DO, CARRIER_PRIVILEGE_REF_AR_DO),
+                getAllRules());
+        assertChanged(refreshBefore, getRefreshTag());
+    }
+
+    @Test
+    void permArDoRuleIsReplacedAndDeletedByItsExactRefDo() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+        personalize(CARRIER_PRIVILEGE_REF_AR_DO);
+
+        byte[] replacement =
+                ruleWithArDoValue(
+                        APPLET_AID,
+                        SHA256_CERT_HASH,
+                        concat(APDU_DENY_AR_DO_VALUE, permArDo(OTHER_PERMISSION_MASK)));
+        personalize(replacement);
+
+        assertArrayEquals(
+                allRules(PERMISSIVE_ALLOW_REF_AR_DO, replacement), getAllRules());
+
+        personalizeCommand(deleteByRefDo(refDoOf(CARRIER_PRIVILEGE_REF_AR_DO)));
+
+        assertArrayEquals(allRules(PERMISSIVE_ALLOW_REF_AR_DO), getAllRules());
+    }
+
+    @Test
+    void apduAndPermArDoWorstCaseRuleStillFitsOneRecord() {
+        byte[] aid = new byte[16];
+        aid[0] = (byte) 0xF0;
+        aid[15] = (byte) 0x7F;
+        byte[] twoFilterMaskPairs = new byte[16];
+        byte[] worstCase =
+                ruleWithArDoValue(
+                        aid,
+                        SHA256_CERT_HASH,
+                        concat(
+                                tlv((byte) 0xD0, twoFilterMaskPairs),
+                                permArDo(CARRIER_PRIVILEGE_MASK)));
+
+        assertEquals(86, worstCase.length);
+        assertTrue(worstCase.length <= AraMApplet.MAX_REF_AR_DO_LENGTH);
+
+        personalize(worstCase);
+
+        assertArrayEquals(allRules(worstCase), getAllRules());
+    }
+
+    @Test
+    void permArDoBeforeApduArDoReturns6A80WithoutMutation() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+
+        assertWrongDataWithoutMutation(
+                upsert(
+                        permRule(
+                                concat(
+                                        permArDo(CARRIER_PRIVILEGE_MASK),
+                                        APDU_ALLOW_AR_DO_VALUE))));
+    }
+
+    @Test
+    void permArDoWithWrongLengthReturns6A80WithoutMutation() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+
+        assertWrongDataWithoutMutation(
+                upsert(
+                        permRule(
+                                concat(
+                                        APDU_ALLOW_AR_DO_VALUE,
+                                        permArDo(new byte[7])))));
+        assertWrongDataWithoutMutation(
+                upsert(
+                        permRule(
+                                concat(
+                                        APDU_ALLOW_AR_DO_VALUE,
+                                        permArDo(new byte[9])))));
+        assertWrongDataWithoutMutation(
+                upsert(
+                        permRule(
+                                concat(
+                                        APDU_ALLOW_AR_DO_VALUE,
+                                        permArDo(new byte[0])))));
+    }
+
+    @Test
+    void duplicatePermArDoReturns6A80WithoutMutation() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+
+        assertWrongDataWithoutMutation(
+                upsert(
+                        permRule(
+                                concat(
+                                        APDU_ALLOW_AR_DO_VALUE,
+                                        concat(
+                                                permArDo(CARRIER_PRIVILEGE_MASK),
+                                                permArDo(CARRIER_PRIVILEGE_MASK))))));
+    }
+
+    @Test
+    void permArDoWithoutApduArDoReturns6A80WithoutMutation() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+
+        assertWrongDataWithoutMutation(
+                upsert(permRule(permArDo(CARRIER_PRIVILEGE_MASK))));
+    }
+
+    @Test
+    void trailingBytesAfterPermArDoReturns6A80WithoutMutation() {
+        personalize(PERMISSIVE_ALLOW_REF_AR_DO);
+
+        assertWrongDataWithoutMutation(
+                upsert(
+                        permRule(
+                                concat(
+                                        APDU_ALLOW_AR_DO_VALUE,
+                                        concat(
+                                                permArDo(CARRIER_PRIVILEGE_MASK),
+                                                hex("00"))))));
+    }
+
+    @Test
     void rawStoreDataIsRejectedWithoutMutatingCatalogOrRefreshTag() {
         byte[] rulesBefore = getAllRules();
         byte[] refreshBefore = getRefreshTag();
@@ -650,11 +794,27 @@ final class AraMAppletTest {
     }
 
     private static byte[] ruleFor(byte[] aid, byte[] deviceAppId, boolean allow) {
+        return ruleWithArDoValue(
+                aid,
+                deviceAppId,
+                allow ? APDU_ALLOW_AR_DO_VALUE : APDU_DENY_AR_DO_VALUE);
+    }
+
+    private static byte[] ruleWithArDoValue(
+            byte[] aid, byte[] deviceAppId, byte[] arDoValue) {
         byte[] refDoValue =
                 concat(tlv((byte) 0x4F, aid), tlv((byte) 0xC1, deviceAppId));
         byte[] refDo = tlv((byte) 0xE1, refDoValue);
-        byte[] arDo = hex(allow ? "E303D00101" : "E303D00100");
-        return tlv((byte) 0xE2, concat(refDo, arDo));
+        return tlv((byte) 0xE2, concat(refDo, tlv((byte) 0xE3, arDoValue)));
+    }
+
+    private static byte[] permArDo(byte[] mask) {
+        return tlv((byte) 0xDB, mask);
+    }
+
+    /** A rule for the standard PERM-AR-DO key, with a caller-supplied AR-DO value. */
+    private static byte[] permRule(byte[] arDoValue) {
+        return ruleWithArDoValue(APPLET_AID, SHA256_CERT_HASH, arDoValue);
     }
 
     private static byte[] allRules(byte[]... rules) {

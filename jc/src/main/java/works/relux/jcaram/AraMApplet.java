@@ -37,6 +37,9 @@ final class AraMApplet {
     private static final byte TAG_DEVICE_APP_ID_REF_DO = (byte) 0xC1;
     private static final byte TAG_AR_DO = (byte) 0xE3;
     private static final byte TAG_APDU_AR_DO = (byte) 0xD0;
+    private static final byte TAG_PERM_AR_DO = (byte) 0xDB;
+
+    private static final short PERM_AR_DO_LENGTH = (short) 8;
 
     private static final short SW_DATA_OBJECT_NOT_SUPPORTED = (short) 0x6981;
     private static final short SW_REFERENCE_DATA_INVALID = (short) 0x6984;
@@ -765,6 +768,17 @@ final class AraMApplet {
             malformed();
         }
         cursor = checkedEnd(cursor, apduArLength, arDoEnd);
+
+        if (cursor != arDoEnd) {
+            // SEAC member order: the optional PERM-AR-DO follows the APDU-AR-DO.
+            cursor = requireTag(input, cursor, arDoEnd, TAG_PERM_AR_DO);
+            short permArLength = readLength(input, cursor, arDoEnd);
+            cursor++;
+            if (permArLength != PERM_AR_DO_LENGTH) {
+                malformed();
+            }
+            cursor = checkedEnd(cursor, permArLength, arDoEnd);
+        }
 
         if (cursor != arDoEnd || arDoEnd != end) {
             malformed();
