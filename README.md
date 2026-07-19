@@ -1,27 +1,45 @@
-# jc-ara-m — minimal Java Card ARA-M applet
+# jc-ara-m — bounded Java Card ARA-M applet
 
-`jc-ara-m` is a single-rule GlobalPlatform Secure Element Access Control
-(SEAC) ARA-M applet. Its instance AID is the standard ARA-M AID
-`A00000015141434C00`. It is intentionally minimal — one rule slot — and scoped
-to the phase-1/phase-2 access-control flow it was built for:
+`jc-ara-m` is a bounded GlobalPlatform Secure Element Access Control (SEAC)
+ARA-M applet. Its instance AID is the standard ARA-M AID
+`A00000015141434C00`. The installed profile holds up to 16 active rules in a
+17-record copy-on-write arena:
 
-- store one validated `REF-AR-DO`;
-- return that rule to Android's `AccessControlEnforcer`;
-- replace the slot only through authenticated Security Domain personalization;
+- idempotently upsert validated `REF-AR-DO` values by exact `REF-DO`;
+- delete by AID, exact `REF-DO`, or the complete catalog;
+- return active rules to Android's `AccessControlEnforcer`;
+- mutate only through authenticated Security Domain personalization;
 - receive personalization data through the standard
   `org.globalplatform.Application` contract;
 - support empty, SHA-1, and SHA-256 `DeviceAppID-REF-DO` values without
   changing the persistent representation.
 
-The implementation does not install anything on hardware. Physical
-installation and secure-channel provisioning belong to the follow-up install
-task.
+The applet implementation does not install anything on hardware. The repository
+also ships a host provisioner whose default modes are read-only or offline
+dry-runs. Physical authenticated mutation requires explicit `--execute`, a
+0600 Security Domain credential file, and—during standard-AID migration—the
+exact maintenance acknowledgement emitted by `migration-plan`.
+
+## Architecture
+
+The accepted multi-rule design is specified in
+[`docs/architecture/multi-rule-seac-architecture.md`](docs/architecture/multi-rule-seac-architecture.md).
+Its focused lifecycle diagrams live under [`diagrams/`](diagrams/README.md).
+WP1 implements the bounded catalog, `F0`/`F1`, and atomic rule/refresh/revision
+publication. WP2 streams that catalog through full-length `FF40` and raw
+`FF60` continuation responses without allocating a second catalog buffer.
 
 ## Project layout
 
 ```text
 jc-ara-m/
+├── diagrams/                    # PlantUML lifecycle views
+├── docs/architecture/           # Architecture decisions
+├── host/                        # Go desired-state provisioner + migration controls
+├── scripts/
+│   └── build-migration-assets.sh # signed rollback/release/canary CAP builder
 ├── README.md
+├── UNRESOLVED_QUESTIONS.md      # Evidence gates not settled by design
 └── jc/
     ├── build.gradle
     ├── cap-build.xml
@@ -37,6 +55,100 @@ jc-ara-m/
 The CAP package AID is `A00000015141434C`; the installable applet instance AID
 is `A00000015141434C00`.
 
+## Host desired-state provisioner
+
+`host/cmd/aram-provisioner` treats desired/current catalogs as maps keyed by
+exact `REF-DO`. It validates complete bounded-profile `E2` rules, rejects
+duplicate keys, sorts by AID bytes and then DeviceAppID length/bytes, and emits
+the fail-closed order `updates -> deletes -> adds`. Every add/update is one
+complete `F0`; every obsolete exact key is one `F1`. Output contains only
+counts, lengths, and truncated SHA-256 identifiers—not AIDs, certificate
+hashes, refresh values, APDUs, or Security Domain keys.
+
+Manifest files contain policy material and must be regular, non-symlink files
+with mode 0600. Their schema is:
+
+```json
+{
+  "capacity": 16,
+  "rules": [
+    {"ref_ar_do": "<complete E2 REF-AR-DO hex>"}
+  ]
+}
+```
+
+Offline plan, with no reader access:
+
+```bash
+cd host
+go run ./cmd/aram-provisioner plan \
+  --current /secure/current.json \
+  --desired /secure/desired.json
+```
+
+Read/re-diff from a card through `jc-harness`; add `--execute` and a secure
+credential file only inside the authorized maintenance flow:
+
+```bash
+go run ./cmd/aram-provisioner reconcile \
+  --desired /secure/desired.json \
+  --reader OMNIKEY
+
+go run ./cmd/aram-provisioner reconcile \
+  --desired /secure/desired.json \
+  --reader OMNIKEY \
+  --execute \
+  --credentials /secure/sd-credentials.json
+```
+
+The execution path opens one authenticated `gp-t0-helper secure-apdu` session,
+enters `INSTALL [for personalization]`, and sends the deterministic N-command
+manifest. If the process or transport fails, the command reports unknown state;
+rerunning always re-reads `FF40`/`FF60` and recomputes the remaining diff. It
+never replays an assumed suffix. Final readback must equal the normalized
+desired set exactly.
+
+## v0.1.1 migration controls
+
+Build automation creates three signed, digest-pinned CAPs: `v0.1.1` rollback
+from the immutable tag, the multi-rule standard-AID release, and an
+alternate-AID canary. It also writes toolchain manifests, a canary-evidence
+template whose physical gates are initially false, and a migration-config
+template. `--dry-run` validates the asset plan without building or touching a
+card:
+
+```bash
+scripts/build-migration-assets.sh \
+  --output-dir .temp/migration-assets/release \
+  --toolchain /abs/path/to/cap-toolchain \
+  --signing-key /secure/path/release-signing.pem \
+  --canary-package-aid A00000015141434D \
+  --canary-instance-aid A00000015141434D00 \
+  --dry-run
+```
+
+The guarded runbook is inspectable without hardware:
+
+```bash
+cd host
+go run ./cmd/aram-provisioner migration-plan \
+  --config /secure/migration-config.json
+```
+
+Execution is rejected until rollback/canary/release digests, detached
+signatures, toolchain manifests, and every canary evidence check match the
+configured capacity. Each toolchain manifest binds the CAP digest, source
+commit plus working-tree diff digest, Java/Java Card toolchain identity, and
+expected package/applet AIDs. The forward path exports the current v0.1.1 rule to a
+0600 task-scoped file, deletes/installs through authenticated
+`gp-t0-helper delete-if-present`/`install`, restores the exported rule first,
+then reconciles the full desired catalog. Any failure after standard-package
+deletion runs the explicit rollback branch: remove a partial release, reinstall
+v0.1.1, restore the exported rule through authenticated personalization, and
+verify exact catalog plus raw selected-applet `E2=6982` denial. Rollback uses a
+fresh bounded recovery context, independent of forward-operation cancellation
+or deadline expiry, so a timed-out forward command cannot suppress recovery.
+
 ## Android/SEAC APDUs
 
 Android selects the ARA-M and performs the refresh query before fetching all
@@ -46,12 +158,13 @@ rules.
 | --- | --- | --- |
 | SELECT ARA-M | `00 A4 04 00 09 A00000015141434C00` | empty |
 | GET DATA [refresh tag] | `80 CA DF 20 00` | `DF 20 08 <8-byte tag>` |
-| GET DATA [all] | `80 CA FF 40 00` | `FF 40 <len> <zero or one E2>` |
+| GET DATA [all] | `80 CA FF 40 00` | `FF 40 <full BER length> <first E2 bytes>` |
+| GET DATA [next] | `80 CA FF 60 00` | next raw catalog bytes |
 
 Raw `STORE DATA` is not a runtime ARA-M command. Sending
 `80 E2 90 00 <Lc> <F0 command DO>` directly to the selected applet is rejected
-with `6982` (`Security status not satisfied`) and cannot change either the rule
-or refresh tag. Rule mutation is available only when an authenticated Security
+with `6982` (`Security status not satisfied`) and cannot change the catalog or
+refresh tag. Rule mutation is available only when an authenticated Security
 Domain personalization flow delivers the same command buffer through
 `Application.processData(...)`.
 
@@ -60,7 +173,7 @@ The implementation accepts the GlobalPlatform proprietary CLA ranges
 
 ## Access-rule TLV layout
 
-`GET DATA [all]` wraps the stored rule in `Response-ALL-AR-DO`:
+`GET DATA [all]` wraps the active rules in `Response-ALL-AR-DO`:
 
 ```text
 FF40 <length>                         Response-ALL-AR-DO
@@ -95,15 +208,27 @@ After provisioning, `GET DATA [all]` returns:
 FF 40 13 E2 11 E1 0A 4F 06 F0000000AA01 C1 00 E3 03 D0 01 01
 ```
 
+`FF40` advertises the complete concatenated active-rule length in BER short,
+`81`, or `82` form. Its first response carries as many catalog bytes as fit.
+If bytes remain, Android repeats `FF60`; each successful response contains only
+the next raw bytes and status `9000`, with no repeated `FF40` tag or length.
+
+One transient continuation is bound to the originating logical channel. A
+second channel receives `6984`; `FF60` without a live continuation receives
+`6985`. A catalog mutation invalidates the continuation by revision: the next
+bound-channel `FF60` returns `6984` once and clears it. A new same-channel
+`FF40` restarts from offset zero, and reset/deselect clears transient read state.
+
 The `DF20` refresh tag is eight bytes generated at installation and changed
-atomically with every accepted rule replacement.
+atomically with every real catalog mutation. A byte-identical `F0` retry and an
+empty `F1 00` retry are idempotent and leave refresh/revision unchanged.
 
 ## Authenticated STORE DATA provisioning APDUs
 
-`STORE DATA` carries one `Command-Store-REF-AR-DO` (`F0`) around the `E2`
-rule. `P1=90` means the last BER-TLV-formatted block is present, and `P2=00` is
-block zero. This implementation accepts one complete short-APDU block; the
-supported rule forms are far below that limit.
+`STORE DATA` carries one complete `F0` upsert or `F1` delete command.
+`P1=90` means the last BER-TLV-formatted block is present, and `P2=00` is block
+zero. This implementation accepts one complete short-APDU block; the supported
+rule forms are far below that limit.
 
 The command buffer for the phase-1 permissive HelloApplet rule is:
 
@@ -139,8 +264,8 @@ authenticated `INSTALL [for personalization]` step succeeds. Do not select the
 ARA-M instance and send the STORE DATA command directly: the applet's raw ISO
 dispatch rejects `INS E2` with `6982` by design.
 
-Sending the same reference with `D0 01 00` replaces the APDU rule with
-`NEVER`:
+Sending the same exact `REF-DO` with `D0 01 00` replaces only that key's APDU
+rule with `NEVER`:
 
 ```text
 80E2900015F013E211E10A4F06F0000000AA01C100E303D00100
@@ -163,10 +288,24 @@ The phase-2 SHA-1 certificate-bound shape replaces `C1 00` with
 For SHA-256, use `C1 20 <32-byte hash>`; the corresponding enclosing lengths
 are `E1 2A`, `E2 31`, `F0 33`, and APDU `Lc=35`.
 
+Authenticated deletion uses these `F1` command forms:
+
+```text
+F1 00                              delete all rules
+F1 <len> 4F <len> <AID>            delete every rule for one applet AID
+F1 <len> E1 <len> 4F ... C1 ...    delete one exact REF-DO key
+```
+
+Adding a new key at 16 active rules returns `6A84`; exact-key overwrite still
+uses the seventeenth copy-on-write spare. A targeted delete with no match
+returns `6A88`. Neither rejection changes the catalog, refresh tag, or revision.
+
 Within the authenticated personalization callback, the applet validates the
 complete nested TLV before mutating persistent state. Malformed data returns
-`6A80` and leaves the prior rule and refresh tag unchanged. Any accepted
-callback replaces the project's single rule slot.
+`6A80` and leaves the prior catalog and refresh tag unchanged. At transaction
+depth zero the applet stages into an inactive record and owns the small metadata
+transaction. Inside a caller/Security-Domain transaction it atomically journals
+the complete candidate record and leaves commit/abort ownership with the caller.
 
 In a hardware flow, send provisioning through an authenticated GlobalPlatform
 administrative channel. The applet intentionally does not invent a second
@@ -185,14 +324,35 @@ The jCardSim suite proves:
 - SELECT returns `9000`;
 - the applet implements the Security Domain personalization contract;
 - raw `INS E2` is rejected with `6982` without changing rules or refresh tag;
-- the actual `Application.processData(...)` callback accepts personalization;
+- the actual `Application.processData(...)` callback accepts full-buffer
+  personalization and honors a non-zero buffer offset;
 - unprovisioned GET DATA [all] returns `FF4000`;
-- authenticated personalization provisions a permissive rule;
-- GET DATA [all] returns the exact `FF40`/`E2` TLV;
-- a second authenticated personalization replaces the same reference;
-- GET DATA [refresh tag] is well formed and changes after provisioning;
-- a future 20-byte certificate-bound `C1` shape is accepted;
-- malformed personalization does not clobber the existing rule.
+- small catalogs complete in one `FF40` response, while large catalogs stream
+  every active arena record through raw `FF60` responses with `9000`;
+- `FF40` uses short/`81`/`82` BER lengths at 127/128/255/256 boundaries;
+- continuation is logical-channel-bound, restarts on same-channel `FF40`, and
+  clears on reset;
+- mutation during a read returns `6984` once and invalidates the stale session;
+- `FF60` before `FF40` or after a completed read returns `6985`;
+- `F0` adds several exact keys, overwrites one key, and treats identical retries
+  as no-ops;
+- `F1` deletes by AID, exact `REF-DO`, and all, including no-match semantics;
+- capacity rejects the seventeenth active key while allowing a full-catalog
+  overwrite through the spare record;
+- every real mutation changes `DF20`, while rejected/no-op commands do not;
+- caller-owned transaction composition leaves transaction ownership outside the
+  applet;
+- corruption of every inactive spare remains unreachable and a later upsert
+  safely overwrites one spare;
+- SHA-1 and SHA-256 certificate-bound keys coexist;
+- zero-length AIDs are rejected with `6A80` for both `F0` upsert and exact
+  `REF-DO` `F1` delete without changing catalog metadata;
+- malformed and unsupported personalization do not clobber existing state.
+
+jCardSim 3.0.5.9 tracks transaction depth but does not journal array writes, so
+it cannot prove outer-transaction rollback. JC304 CAP verification proves the
+transactional APIs convert; real abort/tear behavior remains a physical-card
+acceptance gate.
 
 JUnit XML and HTML reports are written under `jc/build/test-results/test/` and
 `jc/build/reports/tests/test/`.
@@ -249,6 +409,20 @@ Java Card converter and CAP verifier.
 
 ## Tools
 
+- Go (`host/`) — builds and tests the desired-state provisioner and migration
+  controls. Run `go test ./...`, `go vet ./...`, and
+  `go build ./cmd/aram-provisioner` from `host/`; normal Go build/test outputs
+  stay in the Go cache, while an explicit `-o` output should go under `.temp/`.
+- `jc-harness` — forced-T=0 read-only `SELECT`/`FF40`/`FF60`/`DF20` catalog
+  access and raw-STORE-denial verification. Invoked by `aram-provisioner`; it
+  does not implement GlobalPlatform secure-channel crypto.
+- `gp-t0-helper` — forced-T=0 GlobalPlatform authenticated
+  `secure-apdu`/`install`/`delete-if-present` operations. The provisioner never
+  uses its unauthenticated raw `apdu` path for rule mutation.
+- OpenSSL + `scripts/build-migration-assets.sh` — detached CAP signatures and
+  public-key verification inputs. Generated release/rollback/canary assets and
+  task evidence belong under task-scoped `.temp/`, not in git.
+
 - Gradle wrapper (`jc/gradlew`) — compiles the applet against jCardSim and runs
   JUnit 5 tests, and resolves the GlobalPlatform Java Card API used by the CAP
   converter. Run `./gradlew clean test --no-daemon` from `jc/`; output goes to
@@ -258,6 +432,11 @@ Java Card converter and CAP verifier.
 - Ant + ant-javacard (`jc/cap-build.xml`) — converts and verifies a real Java
   Card Classic CAP. Run the JDK 11 command above; output goes to
   `jc/artifacts/caps/`.
+- PlantUML (`diagrams/**/*.puml`) — validates and renders the multi-rule
+  lifecycle views. Run
+  `plantuml -checkonly diagrams/plantuml/sequence/*.puml diagrams/plantuml/state/*.puml`
+  from the repository root; optional review renders go under
+  `.temp/TASK-260719-3r17pa/plantuml/`.
 
 ## References
 
@@ -265,6 +444,7 @@ Java Card converter and CAP verifier.
 - [AOSP AccessRuleApplet](https://android.googlesource.com/platform/packages/apps/SecureElement/+/refs/heads/main/src/com/android/se/security/ara/AccessRuleApplet.java)
 - [AOSP AraController](https://android.googlesource.com/platform/packages/apps/SecureElement/+/refs/heads/main/src/com/android/se/security/ara/AraController.java)
 - [AOSP UICC carrier privileges](https://source.android.com/docs/core/connect/uicc)
+- [Multi-rule SEAC architecture](docs/architecture/multi-rule-seac-architecture.md)
 
 ## License
 
