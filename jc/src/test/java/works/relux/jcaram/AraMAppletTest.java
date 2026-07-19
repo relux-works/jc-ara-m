@@ -370,7 +370,7 @@ final class AraMAppletTest {
     @Test
     void capacityFullRejectsNewKeyWithoutChangingRefresh() {
         for (short index = (short) 0;
-                index < AraMApplet.ACTIVE_RULE_CAPACITY;
+                index < AraMApplet.DEFAULT_ACTIVE_RULE_CAPACITY;
                 index++) {
             personalize(uniqueRule(index, true));
         }
@@ -381,7 +381,7 @@ final class AraMAppletTest {
                         ISOException.class,
                         () ->
                                 personalize(
-                                        uniqueRule(AraMApplet.ACTIVE_RULE_CAPACITY, true)));
+                                        uniqueRule(AraMApplet.DEFAULT_ACTIVE_RULE_CAPACITY, true)));
 
         assertEquals(0x6A84, rejected.getReason() & 0xFFFF);
         assertArrayEquals(refreshAtCapacity, getRefreshTag());
@@ -788,9 +788,9 @@ final class AraMAppletTest {
     }
 
     private byte[][] personalizeLargeCatalog() {
-        byte[][] rules = new byte[AraMApplet.ACTIVE_RULE_CAPACITY][];
+        byte[][] rules = new byte[AraMApplet.DEFAULT_ACTIVE_RULE_CAPACITY][];
         for (short index = (short) 0;
-                index < AraMApplet.ACTIVE_RULE_CAPACITY;
+                index < AraMApplet.DEFAULT_ACTIVE_RULE_CAPACITY;
                 index++) {
             rules[index] = largeRule(index, true);
             personalize(rules[index]);
@@ -809,13 +809,13 @@ final class AraMAppletTest {
     }
 
     private static byte[] allRulesAfterLargeRuleOverwrite() {
-        byte[][] rules = new byte[AraMApplet.ACTIVE_RULE_CAPACITY][];
+        byte[][] rules = new byte[AraMApplet.DEFAULT_ACTIVE_RULE_CAPACITY][];
         for (short index = (short) 1;
-                index < AraMApplet.ACTIVE_RULE_CAPACITY;
+                index < AraMApplet.DEFAULT_ACTIVE_RULE_CAPACITY;
                 index++) {
             rules[(short) (index - (short) 1)] = largeRule(index, true);
         }
-        rules[(short) (AraMApplet.ACTIVE_RULE_CAPACITY - (short) 1)] =
+        rules[(short) (AraMApplet.DEFAULT_ACTIVE_RULE_CAPACITY - (short) 1)] =
                 largeRule((short) 0, false);
         return allRules(rules);
     }
@@ -995,7 +995,7 @@ final class AraMAppletTest {
             byte[] bitmap = (byte[]) bitmapField.get(logic);
 
             int recordSize = 1 + AraMApplet.MAX_REF_AR_DO_LENGTH;
-            int recordCount = AraMApplet.ACTIVE_RULE_CAPACITY + 1;
+            int recordCount = AraMApplet.DEFAULT_ACTIVE_RULE_CAPACITY + 1;
             for (int recordIndex = 0; recordIndex < recordCount; recordIndex++) {
                 int mask = 1 << (recordIndex & 7);
                 boolean active = (bitmap[recordIndex >> 3] & mask) != 0;

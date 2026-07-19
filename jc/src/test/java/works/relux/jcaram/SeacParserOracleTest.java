@@ -156,7 +156,7 @@ final class SeacParserOracleTest {
     @Test
     void multiChunkFf60SequenceReassemblesIntoTheProvisionedRuleSet() throws Exception {
         List<byte[]> provisioned = new ArrayList<byte[]>();
-        for (short index = (short) 0; index < AraMApplet.ACTIVE_RULE_CAPACITY; index++) {
+        for (short index = (short) 0; index < AraMApplet.DEFAULT_ACTIVE_RULE_CAPACITY; index++) {
             provisioned.add(largeRule(index));
         }
         provision(provisioned.toArray(new byte[0][]));

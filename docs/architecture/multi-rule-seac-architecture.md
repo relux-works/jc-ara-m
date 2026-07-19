@@ -124,11 +124,48 @@ next bitmap and next refresh tag are used to stage metadata. Read cursor,
 channel binding, and revision snapshot are transient and consume RAM, not
 EEPROM.
 
-`R` is an installation-time capacity in the release profile, with a documented
-default and an allowed range. Allocation failure must fail applet installation;
-runtime `F0` add at `R` active records returns `6A84` and changes nothing. The
-production value for CARD#5 is a release gate measured by the physical
-acceptance task, not an unverified EEPROM claim in this document.
+`R` is an installation-time capacity, read from the GlobalPlatform
+application-specific install parameter block. Allocation failure must fail applet
+installation; runtime `F0` add at `R` active records returns `6A84` and changes
+nothing. The production value for CARD#5 is a release gate measured by the
+physical acceptance task, not an unverified EEPROM claim in this document.
+
+#### Install parameter format
+
+`AraMJCApplet.install()` parses the JCRE installation parameter array — the three
+length-value fields *instance AID*, *privileges*, *application-specific
+parameters* — and reads `R` out of the last one. That block is either empty, or
+carries the proprietary TLV
+
+```text
+80 01 R      R = active-rule capacity, 1..64
+```
+
+optionally still wrapped in its `C9` container, since Security Domains differ on
+whether they strip the tag before handing the block to the JCRE. Bytes trailing
+the application-specific block are tolerated for the same reason; bytes trailing
+the capacity TLV *inside* the block are not.
+
+| Parameter block | Resulting `R` |
+| --- | --- |
+| absent, or empty, or an empty `C9` container | 16 (`DEFAULT_ACTIVE_RULE_CAPACITY`) |
+| `80 01 R` with `1 <= R <= 64` | `R` |
+| `80 01 R` with `R > 64` | 64 (`MAX_ACTIVE_RULE_CAPACITY`, clamped, not rejected) |
+| anything else — `R = 0`, unknown tag, wrong value width, truncated or overlong LV framing | rejected: `6A80`, installation fails |
+
+Clamping rather than rejecting an oversized request keeps a provisioning mistake
+from growing the arena past the sized-and-measured release profile, while a
+malformed block fails installation loudly instead of silently falling back to a
+capacity nobody asked for. The compiled maximum is what bounds the design: `R` is
+field-configurable per instance without a rebuild, but it can never exceed the
+value the release profile was measured against.
+
+All allocation still happens exactly once, in the `AraMApplet` constructor:
+arena, both bitmaps, the transient staging buffers, and the commit-capacity
+budgets are all derived from the resolved `R` and never grow afterwards. Because
+static fields are shared across instances of one package, the resolved capacity
+and every size derived from it are instance fields, so two instances of the same
+CAP can carry different capacities.
 
 ### 3.3 Capacity math
 

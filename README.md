@@ -29,6 +29,27 @@ WP1 implements the bounded catalog, `F0`/`F1`, and atomic rule/refresh/revision
 publication. WP2 streams that catalog through full-length `FF40` and raw
 `FF60` continuation responses without allocating a second catalog buffer.
 
+### Installation-time capacity
+
+The active-rule capacity `R` is read at install time from the GlobalPlatform
+application-specific install parameter block, so one CAP covers several capacity
+profiles without a rebuild. The block carries the proprietary TLV `80 01 R`,
+optionally still inside its `C9` container:
+
+| Install parameters | Resulting `R` |
+| --- | --- |
+| absent or empty | 16 (default) |
+| `80 01 R`, `1 <= R <= 64` | `R` |
+| `80 01 R`, `R > 64` | 64 (compiled maximum, clamped) |
+| anything else | rejected `6A80`, installation fails |
+
+Every buffer is allocated once, in the constructor, from the resolved `R`; the
+catalog never grows afterwards. The manifest `capacity` used by the host
+provisioner must match the `R` the instance was installed with — a mismatch
+surfaces as a `6A84` at commit time. Format and rationale:
+[`docs/architecture/multi-rule-seac-architecture.md`](docs/architecture/multi-rule-seac-architecture.md)
+§3.2.
+
 ## Project layout
 
 ```text
@@ -384,6 +405,10 @@ The jCardSim suite proves:
 - `F1` deletes by AID, exact `REF-DO`, and all, including no-match semantics;
 - capacity rejects the seventeenth active key while allowing a full-catalog
   overwrite through the spare record;
+- the installation-time capacity `R` defaults to 16 when absent, is honoured in
+  range (bare or `C9`-wrapped), is clamped above the compiled maximum of 64, and
+  fails installation on a malformed parameter block, with arena and bitmaps sized
+  once from the resolved value (`InstallParametersTest`);
 - every real mutation changes `DF20`, while rejected/no-op commands do not;
 - caller-owned transaction composition leaves transaction ownership outside the
   applet;

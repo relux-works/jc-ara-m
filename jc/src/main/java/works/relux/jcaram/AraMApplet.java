@@ -9,23 +9,25 @@ import javacard.security.RandomData;
 /** Bounded multi-rule ARA-M catalog and authenticated mutation engine. */
 final class AraMApplet {
 
-    /** Installed active-rule capacity R from the accepted capacity profile. */
-    static final short ACTIVE_RULE_CAPACITY = (short) 16;
+    /**
+     * Active-rule capacity R used when the installation parameters carry no capacity
+     * request. This is the accepted capacity profile and the historical compiled value.
+     */
+    static final short DEFAULT_ACTIVE_RULE_CAPACITY = (short) 16;
+
+    /**
+     * Compiled upper bound for the installation-time capacity R. A larger request is
+     * clamped to this value rather than rejected, so a provisioning mistake can never
+     * make the arena grow past what the release profile sized and measured.
+     */
+    static final short MAX_ACTIVE_RULE_CAPACITY = (short) 64;
 
     static final short MAX_REF_AR_DO_LENGTH = (short) 96;
 
     private static final short RECORD_LENGTH_BYTES = (short) 1;
     private static final short RECORD_SIZE =
             (short) (RECORD_LENGTH_BYTES + MAX_REF_AR_DO_LENGTH);
-    private static final short RECORD_COUNT = (short) (ACTIVE_RULE_CAPACITY + (short) 1);
-    private static final short ARENA_LENGTH = (short) (RECORD_COUNT * RECORD_SIZE);
-    private static final short ACTIVE_BITMAP_LENGTH =
-            (short) ((RECORD_COUNT + (short) 7) / (short) 8);
     private static final short REFRESH_TAG_LENGTH = (short) 8;
-    private static final short PUBLICATION_COMMIT_BYTES =
-            (short) (ACTIVE_BITMAP_LENGTH + REFRESH_TAG_LENGTH + (short) 2);
-    private static final short JOINED_F0_COMMIT_BYTES =
-            (short) (RECORD_SIZE + PUBLICATION_COMMIT_BYTES);
 
     private static final byte SCHEMA_VERSION = (byte) 1;
 
@@ -54,6 +56,14 @@ final class AraMApplet {
     private static final short READ_SESSION_REVISION = (short) 6;
     private static final short READ_SESSION_LENGTH = (short) 8;
 
+    /** Installed active-rule capacity R, fixed for the lifetime of this instance. */
+    private final short activeRuleCapacity;
+
+    private final short recordCount;
+    private final short activeBitmapLength;
+    private final short publicationCommitBytes;
+    private final short joinedF0CommitBytes;
+
     private final byte[] recordArena;
     private final byte[] activeBitmap;
     private final byte[] refreshTag;
@@ -66,16 +76,39 @@ final class AraMApplet {
     private final byte[] readSession;
     private final RandomData random;
 
-    AraMApplet() {
-        recordArena = new byte[ARENA_LENGTH];
-        activeBitmap = new byte[ACTIVE_BITMAP_LENGTH];
+    /**
+     * Allocates the whole catalog once, from the installation-time capacity R. Every
+     * persistent and transient buffer is sized here and never grows again: the arena,
+     * both bitmaps, and the commit-capacity budgets are all derived from {@code capacity}.
+     *
+     * @param capacity resolved active-rule capacity, already defaulted and clamped by
+     *     {@link AraMJCApplet#resolveActiveRuleCapacity}. Out-of-range values are rejected
+     *     defensively so the invariant holds for any caller.
+     */
+    AraMApplet(short capacity) {
+        if (capacity < (short) 1 || capacity > MAX_ACTIVE_RULE_CAPACITY) {
+            ISOException.throwIt(ISO7816.SW_WRONG_DATA);
+        }
+        activeRuleCapacity = capacity;
+        recordCount = (short) (capacity + (short) 1);
+        // Every intermediate is cast back to short: the JC converter rejects int
+        // intermediates, and these expressions are no longer compile-time folded.
+        activeBitmapLength = (short) ((short) (recordCount + (short) 7) / (short) 8);
+        publicationCommitBytes =
+                (short)
+                        ((short) (activeBitmapLength + REFRESH_TAG_LENGTH)
+                                + (short) 2);
+        joinedF0CommitBytes = (short) (RECORD_SIZE + publicationCommitBytes);
+
+        recordArena = new byte[(short) (recordCount * RECORD_SIZE)];
+        activeBitmap = new byte[activeBitmapLength];
         refreshTag = new byte[REFRESH_TAG_LENGTH];
         catalogRevision = (short) 0;
         schemaVersion = SCHEMA_VERSION;
 
         nextBitmap =
                 JCSystem.makeTransientByteArray(
-                        ACTIVE_BITMAP_LENGTH, JCSystem.CLEAR_ON_RESET);
+                        activeBitmapLength, JCSystem.CLEAR_ON_RESET);
         nextRefreshTag =
                 JCSystem.makeTransientByteArray(
                         REFRESH_TAG_LENGTH, JCSystem.CLEAR_ON_RESET);
@@ -85,6 +118,11 @@ final class AraMApplet {
                 JCSystem.makeTransientByteArray(READ_SESSION_LENGTH, JCSystem.CLEAR_ON_RESET);
         random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
         random.generateData(refreshTag, (short) 0, REFRESH_TAG_LENGTH);
+    }
+
+    /** Installed active-rule capacity R for this instance. */
+    short activeRuleCapacity() {
+        return activeRuleCapacity;
     }
 
     short writeAllRules(
@@ -241,7 +279,7 @@ final class AraMApplet {
         }
 
         short activeCount = countActiveRecords();
-        if (oldRecord < (short) 0 && activeCount >= ACTIVE_RULE_CAPACITY) {
+        if (oldRecord < (short) 0 && activeCount >= activeRuleCapacity) {
             ISOException.throwIt(ISO7816.SW_FILE_FULL);
         }
 
@@ -255,7 +293,7 @@ final class AraMApplet {
                 (short) 0,
                 nextBitmap,
                 (short) 0,
-                ACTIVE_BITMAP_LENGTH);
+                activeBitmapLength);
         if (oldRecord >= (short) 0) {
             setActive(nextBitmap, oldRecord, false);
         }
@@ -267,13 +305,13 @@ final class AraMApplet {
         if (ownsTransaction) {
             stageInactiveRecordNonAtomic(
                     candidateIndex, input, refArDoOffset, refArDoLength);
-            ensureCommitCapacity(PUBLICATION_COMMIT_BYTES);
+            ensureCommitCapacity(publicationCommitBytes);
             publishMetadata(nextRevision, true);
             return;
         }
 
         prepareCandidateRecord(input, refArDoOffset, refArDoLength);
-        ensureCommitCapacity(JOINED_F0_COMMIT_BYTES);
+        ensureCommitCapacity(joinedF0CommitBytes);
         try {
             Util.arrayCopy(
                     candidateRecord,
@@ -301,7 +339,7 @@ final class AraMApplet {
                 (short) 0,
                 nextBitmap,
                 (short) 0,
-                ACTIVE_BITMAP_LENGTH);
+                activeBitmapLength);
 
         short deletedCount;
         if (cursor == commandValueEnd) {
@@ -338,14 +376,14 @@ final class AraMApplet {
 
         prepareNextRefreshTag();
         short nextRevision = (short) (catalogRevision + (short) 1);
-        ensureCommitCapacity(PUBLICATION_COMMIT_BYTES);
+        ensureCommitCapacity(publicationCommitBytes);
         publishMetadata(nextRevision, JCSystem.getTransactionDepth() == (byte) 0);
     }
 
     private short clearAllActiveRecords() {
         short deletedCount = countActiveRecords();
         Util.arrayFillNonAtomic(
-                nextBitmap, (short) 0, ACTIVE_BITMAP_LENGTH, (byte) 0);
+                nextBitmap, (short) 0, activeBitmapLength, (byte) 0);
         return deletedCount;
     }
 
@@ -367,7 +405,7 @@ final class AraMApplet {
 
         short deletedCount = (short) 0;
         short recordIndex;
-        for (recordIndex = (short) 0; recordIndex < RECORD_COUNT; recordIndex++) {
+        for (recordIndex = (short) 0; recordIndex < recordCount; recordIndex++) {
             if (isActive(activeBitmap, recordIndex)
                     && recordAidEquals(recordIndex, input, aidValueOffset, aidLength)) {
                 setActive(nextBitmap, recordIndex, false);
@@ -390,7 +428,7 @@ final class AraMApplet {
     private short findExactRefDo(byte[] input, short refDoOffset, short refDoLength) {
         short match = (short) -1;
         short recordIndex;
-        for (recordIndex = (short) 0; recordIndex < RECORD_COUNT; recordIndex++) {
+        for (recordIndex = (short) 0; recordIndex < recordCount; recordIndex++) {
             if (!isActive(activeBitmap, recordIndex)) {
                 continue;
             }
@@ -462,7 +500,7 @@ final class AraMApplet {
         short valueLength = (short) 0;
         short activeCount = (short) 0;
         short recordIndex;
-        for (recordIndex = (short) 0; recordIndex < RECORD_COUNT; recordIndex++) {
+        for (recordIndex = (short) 0; recordIndex < recordCount; recordIndex++) {
             if (isActive(activeBitmap, recordIndex)) {
                 activeCount++;
                 valueLength =
@@ -472,7 +510,7 @@ final class AraMApplet {
                 }
             }
         }
-        if (activeCount > ACTIVE_RULE_CAPACITY) {
+        if (activeCount > activeRuleCapacity) {
             malformed();
         }
         return valueLength;
@@ -490,7 +528,7 @@ final class AraMApplet {
         short remaining = maximumLength;
         short recordIndex;
         for (recordIndex = (short) 0;
-                recordIndex < RECORD_COUNT && remaining > (short) 0;
+                recordIndex < recordCount && remaining > (short) 0;
                 recordIndex++) {
             if (!isActive(activeBitmap, recordIndex)) {
                 continue;
@@ -606,27 +644,27 @@ final class AraMApplet {
     private short countActiveRecords() {
         short activeCount = (short) 0;
         short recordIndex;
-        for (recordIndex = (short) 0; recordIndex < RECORD_COUNT; recordIndex++) {
+        for (recordIndex = (short) 0; recordIndex < recordCount; recordIndex++) {
             if (isActive(activeBitmap, recordIndex)) {
                 activeCount++;
             }
         }
-        if (activeCount > ACTIVE_RULE_CAPACITY) {
+        if (activeCount > activeRuleCapacity) {
             malformed();
         }
         return activeCount;
     }
 
     private short findInactiveRecord() {
-        short start = (short) (catalogRevision % RECORD_COUNT);
+        short start = (short) (catalogRevision % recordCount);
         if (start < (short) 0) {
             start = (short) -start;
         }
         short scanned;
-        for (scanned = (short) 0; scanned < RECORD_COUNT; scanned++) {
+        for (scanned = (short) 0; scanned < recordCount; scanned++) {
             short recordIndex = (short) (start + scanned);
-            if (recordIndex >= RECORD_COUNT) {
-                recordIndex = (short) (recordIndex - RECORD_COUNT);
+            if (recordIndex >= recordCount) {
+                recordIndex = (short) (recordIndex - recordCount);
             }
             if (!isActive(activeBitmap, recordIndex)) {
                 return recordIndex;
@@ -697,7 +735,7 @@ final class AraMApplet {
                     (short) 0,
                     activeBitmap,
                     (short) 0,
-                    ACTIVE_BITMAP_LENGTH);
+                    activeBitmapLength);
             Util.arrayCopy(
                     nextRefreshTag,
                     (short) 0,

@@ -33,7 +33,7 @@ encodings, not because it is a candidate implementation.
 | | jc-ara-m | bmartel | sysmocom | cheeriotb |
 | --- | --- | --- | --- | --- |
 | Rule storage | `R+1` flat arena + active bitmap | linked list + free list | same | one static literal |
-| Capacity | **bounded, `R=16`** (compile-time) | unbounded until EEPROM exhaustion | same | 41, baked at build |
+| Capacity | **bounded, `R` set at install** (default 16, compiled max 64) | unbounded until EEPROM exhaustion | same | 41, baked at build |
 | Payload / rule | **~104 B** at `R=16` | 198 B fixed | 210 B fixed | variable (mean ~42 B) |
 | `F0` store | upsert **keyed by exact REF-DO** | append-only | append-only | absent |
 | `F1` delete | all / by AID / by exact REF-DO | all / by AID / by REF-DO; by REF-AR-DO partial | same | absent |
@@ -135,16 +135,22 @@ independent `SEAccessControl` parser, which is a validation technique we do not
 currently use and arguably should. Our advantage is in the layers *below and
 above* the unit tests — host tests, hardware, Android — not in unit-test count.
 
-**2. Unbounded rule count.** Our `R=16` is a hard ceiling; theirs grows until
-EEPROM runs out. For a deployment needing many dozens of rules on a large card,
-their model needs no rebuild while ours needs a new CAP.
+**2. Unbounded rule count.** Our `R` is a hard ceiling, capped at a compiled
+maximum of 64; theirs grows until EEPROM runs out. For a deployment needing more
+rules than that compiled maximum on a large card, their model needs no rebuild
+while ours needs a new CAP.
 
-**3. Capacity is compile-time for us too — the architecture doc overstates
-this.** `docs/architecture/multi-rule-seac-architecture.md:124` calls `R` an
-"installation-time capacity", but `AraMJCApplet.install()` ignores its install
-parameters entirely and `ACTIVE_RULE_CAPACITY` is a `static final short`.
-Changing `R` means building a new CAP, exactly as for the others. The doc
-wording should be corrected; no code currently reads install data.
+**3. ~~Capacity is compile-time for us too~~ — resolved, and now a
+differentiator.** This previously read: the architecture doc calls `R` an
+"installation-time capacity" but `AraMJCApplet.install()` ignores its install
+parameters and `ACTIVE_RULE_CAPACITY` is a `static final short`. That is fixed.
+`install()` now parses the GlobalPlatform application-specific parameter block
+(`80 01 R`, optionally inside its `C9` container), defaults to 16 when absent,
+and clamps to the compiled maximum of 64; every buffer is still allocated once,
+at install, from that value. `R` is therefore field-configurable per instance
+without a rebuild, up to the compiled ceiling — storage that is both bounded
+*and* configurable, which no implementation in this comparison offers. See
+`docs/architecture/multi-rule-seac-architecture.md` §3.2.
 
 **4. They can carry rule shapes we reject.** Because they never parse `AR-DO`
 contents (their README admits "format of APDU-AR-DO, NFC-AR-DO is not checked"),
@@ -273,11 +279,13 @@ trusts it; a mismatch against the installed CAP surfaces only as a `6A84` at
 commit time, mid-rollout. Cross-check it against the digest-pinned release CAP,
 whose toolchain manifest we already retain from the C11 work.
 
-**R6 — Resolve the "installation-time capacity" discrepancy.** Either correct
-the architecture wording, or actually read `R` from install data and clamp it to
-a compiled maximum. The second option is a real differentiator: bounded storage
-*and* field-configurable capacity, which no implementation in this comparison
-has.
+**R6 — Resolve the "installation-time capacity" discrepancy. — DONE.** The
+second, preferred option was implemented: `install()` reads `R` from the
+GlobalPlatform application-specific parameter block, defaults to 16 when absent,
+and clamps to a compiled maximum of 64. Bounded storage *and* field-configurable
+capacity, which no implementation in this comparison has. Covered by
+`InstallParametersTest`; format documented in
+`docs/architecture/multi-rule-seac-architecture.md` §3.2.
 
 ### Expressiveness
 
