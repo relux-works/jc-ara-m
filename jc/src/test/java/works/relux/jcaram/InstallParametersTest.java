@@ -179,6 +179,14 @@ final class InstallParametersTest {
     }
 
     @Test
+    void bytesTrailingTheC9WrappedCapacityTlvAreRejected() {
+        // C9 container of length 3 covers 80 01 04, then a stray 00 trails it inside
+        // the block. The container form must reject the drop with the same 6A80 the
+        // bare form gives, not silently resolve R=4.
+        assertParametersRejected(hex("C90380010400"));
+    }
+
+    @Test
     void aC9ContainerLongerThanTheParameterBlockIsRejected() {
         assertParametersRejected(hex("C90A800104"));
     }

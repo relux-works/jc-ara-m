@@ -1,18 +1,24 @@
 # jc-ara-m vs the open-source ARA-M implementations
 
-Comparison refreshed 2026-07-20, after the multi-rule release (WP1-WP3) and the
-physical CARD#5 / Android acceptance (WP4). It supersedes the single-rule-era
-comparison that produced the `C1`-`C12` ledger in [IMPROVEMENTS.md](../IMPROVEMENTS.md).
+Comparison refreshed 2026-07-21, after the multi-rule release (WP1-WP3), the
+physical CARD#5 / Android acceptance (WP4), and the hardening wave that followed
+it (PERM-AR-DO and catch-all validation, install-time capacity, the independent
+SEAC-parser oracle, the TLV fuzzers, and the Android `FF60` continuation proof).
+It supersedes the single-rule-era comparison that produced the `C1`-`C12` ledger
+in [IMPROVEMENTS.md](../IMPROVEMENTS.md). Where an earlier draft listed a gap as
+open advice, that gap is now recorded as closed evidence below rather than
+lingering as a recommendation.
 
 Every claim about an external project was re-derived from its source at the
 revision checked out locally, not from its README. Source analyses:
 `.temp/TASK-260719-109lj8/research-oss-aram-{bmartel-sysmocom,cheeriotb}.md`.
+Those revisions were re-verified for this refresh, not assumed.
 
 ## The comparison set
 
 | Project | Revision analysed | License | Last commit | What it is |
 | --- | --- | --- | --- | --- |
-| **jc-ara-m** (ours) | `17bb1a6` | Apache-2.0 | active | Bounded multi-rule ARA-M with a host provisioner |
+| **jc-ara-m** (ours) | `3e0561c` | Apache-2.0 | active | Bounded multi-rule ARA-M with a host provisioner |
 | **bertrandmartel/aram-applet** | `d7f7a16` | MIT | 2018-02-27 | Original PoC, 11 commits, unmaintained |
 | **sysmocom/aram-applet** (Osmocom) | `13930d5` | MIT | 2025-03-13 | Maintained fork of the above, 25 commits |
 | **cheeriotb/aram-cardlet** | `83900b6` | GPL-2.0 | 2018-12-22 | Static read-only rule ROM for Android SE CTS |
@@ -47,8 +53,10 @@ encodings, not because it is a candidate implementation.
 | Caller-owned transaction | detected and joined safely | **unhandled** | unhandled | n/a |
 | Multi-rule delete atomicity | one transaction | **per entry, inside the loop** | same | n/a |
 | Commit-capacity preflight | `getUnusedCommitCapacity` | absent | absent | n/a |
-| AR-DO content validated | strict (`D0` only) | **not parsed at all** | not parsed | n/a (static) |
-| Unit tests | 30 jCardSim + 26 Go host | **70 JUnit** | same 70 | **none** |
+| AR-DO content validated | strict: `D0` + optional 8-byte `DB` `PERM-AR-DO` | **not parsed at all** | not parsed | n/a (static) |
+| `PERM-AR-DO` (carrier privilege) | **validated and storable** (`DB`, exactly 8 B) | stored opaquely, unvalidated | same | present in ROM |
+| Catch-all AID (zero-length `4F`) | **accepted; grant policy host-guarded** | stored opaquely, unvalidated | same | present in ROM |
+| Unit tests | **103 jCardSim + 41 Go host**, incl. independent SEAC-parser oracle and TLV fuzzers | 70 JUnit | same 70 | **none** |
 | Physical-card evidence | **CARD#5 accepted** | optional PC/SC mode, none captured | none captured | none |
 | Android evidence | **enforcer grant/deny captured** | absent | absent | absent |
 | Host provisioning tooling | **Go provisioner + migration** | absent | absent | absent |
@@ -128,19 +136,16 @@ no hardware run is captured in the repo.
 
 ## Where the open-source implementations are ahead, honestly
 
-**1. Their unit-test suite is larger than ours.** bmartel/sysmocom carry 70
-JUnit tests against jCardSim (27 applet, 23 linked-list, 20 TLV builder) versus
-our 30. They also cross-check `FF40`/`FF60` responses against GlobalPlatformPro's
-independent `SEAccessControl` parser, which is a validation technique we do not
-currently use and arguably should. Our advantage is in the layers *below and
-above* the unit tests — host tests, hardware, Android — not in unit-test count.
+The 2026-07-20 draft listed a larger unit-test suite and two unstorable rule
+shapes here. Both are now closed — see "Hardening closed since the last refresh"
+below for the evidence. What genuinely remains in their favour is narrower.
 
-**2. Unbounded rule count.** Our `R` is a hard ceiling, capped at a compiled
+**1. Unbounded rule count.** Our `R` is a hard ceiling, capped at a compiled
 maximum of 64; theirs grows until EEPROM runs out. For a deployment needing more
 rules than that compiled maximum on a large card, their model needs no rebuild
 while ours needs a new CAP.
 
-**3. ~~Capacity is compile-time for us too~~ — resolved, and now a
+**2. ~~Capacity is compile-time for us too~~ — resolved, and now a
 differentiator.** This previously read: the architecture doc calls `R` an
 "installation-time capacity" but `AraMJCApplet.install()` ignores its install
 parameters and `ACTIVE_RULE_CAPACITY` is a `static final short`. That is fixed.
@@ -152,29 +157,35 @@ without a rebuild, up to the compiled ceiling — storage that is both bounded
 *and* configurable, which no implementation in this comparison offers. See
 `docs/architecture/multi-rule-seac-architecture.md` §3.2.
 
-**4. They can carry rule shapes we reject.** Because they never parse `AR-DO`
-contents (their README admits "format of APDU-AR-DO, NFC-AR-DO is not checked"),
-they store arbitrary rule bytes opaquely and can therefore hold NFC rules,
-`PERM-AR-DO`, and anything else a future spec adds. Our validator accepts
-exactly one `D0` inside `E3` and nothing else. Concretely, from cheeriotb's
-real CTS rule set, jc-ara-m **cannot** store:
+**3. They can still carry two rule shapes we reject — `NFC-AR-DO` and
+`PKG-REF-DO`.** Because they never parse `AR-DO` contents (their README admits
+"format of APDU-AR-DO, NFC-AR-DO is not checked"), they store arbitrary rule
+bytes opaquely and can hold anything a future spec adds. We now validate and
+store the two shapes that mattered most — `D0` APDU rules **and** the 8-byte
+`DB` `PERM-AR-DO`, plus the zero-length catch-all `AID-REF-DO` — but our
+validator still rejects:
 
-  - the Android carrier-privilege rule shape, which pairs `D0` with a
-    `DB` `PERM-AR-DO` in one `AR-DO`;
-  - a catch-all `4F 00 C1 00` rule, because we require an AID of 5-16 bytes.
+  - `NFC-AR-DO` (`D1`): changes validation and merge semantics, deferred to a
+    concrete NFC requirement (see C12 / R9 below);
+  - `PKG-REF-DO` (`CA`): package names push a `REF-AR-DO` past the 96-byte
+    record and force a capacity re-plan, deferred until a requirement exists.
 
   What we *can* express: APDU filter/mask pairs (`D0` of any multiple of 8),
-  `Always`/`Never` (`D0 01 01` / `D0 01 00`), a zero-length `DeviceAppID`
-  wildcard meaning any device app, and SHA-1 or SHA-256 signer hashes. The
-  all-`FF` AID that Android uses for carrier privileges also passes, since we
-  treat it as an ordinary 6-byte AID — but without `PERM-AR-DO` support that
-  only reproduces half of the rule.
+  `Always`/`Never` (`D0 01 01` / `D0 01 00`), the 8-byte `PERM-AR-DO`, a
+  zero-length `DeviceAppID` wildcard, the zero-length catch-all AID, and SHA-1
+  or SHA-256 signer hashes. The Android carrier-privilege rule shape — the
+  all-`FF` wildcard AID paired with `D0` + `PERM-AR-DO` — now validates and
+  stores in full.
 
-  This is a deliberate safety-versus-expressiveness trade, but it is a real
-  functional gap, not a formality. It should be reopened by a concrete product
+  **One honest caveat:** `PERM-AR-DO` support lives in code (`3e0561c`) but the
+  pinned installed CAP is `v0.2.0-rc1` (`5b6e170`), which predates the
+  `2e1abc4` PERM-AR-DO commit. So the *capability* is present and tested on the
+  simulator, but no carrier-privilege `PERM-AR-DO` rule is deployed on the
+  installed CAP yet. The remaining `D1`/`CA` gap is a deliberate
+  safety-versus-expressiveness trade, reopened only by a concrete product
   requirement, not by comparison pressure.
 
-**5. `FF50` and `F2` exist there and not here.** Both are deliberate skips —
+**4. `FF50` and `F2` exist there and not here.** Both are deliberate skips —
 `FF50` is deprecated in SEAC v1.1 and AOSP consumes the full catalog through
 `FF40`/`FF60`, and automatic refresh is strictly stronger than a separate `F2`
 lifecycle. They remain capability differences on paper.
@@ -224,84 +235,96 @@ Against the `C1`-`C12` decision ledger in [IMPROVEMENTS.md](../IMPROVEMENTS.md):
 | --- | --- | --- |
 | C1 many-to-many capacity | PULL-IN P0 | **DONE** — arena shipped, `R=16` filled and `6A84` proven on CARD#5 |
 | C2 keyed update / individual delete | PULL-IN P0 | **DONE** — `F0` upsert + `F1` forms, exercised on hardware |
-| C3 `FF60` continuation | PULL-IN P0 | **DONE** — 816-byte catalog streamed in 3 continuations on CARD#5 |
-| C9 deterministic SHA-256 simulator vectors | PULL-IN P1 | **PARTIAL** — a SHA-256 fixture and a coexistence test exist; dedicated store/readback/replacement/refresh/malformed assertions still absent. Hardware now proves SHA-256 grant *and* deny, which lowers the risk but does not satisfy the simulator contract |
+| C3 `FF60` continuation | PULL-IN P0 | **DONE** — 816-byte catalog streamed in 3 continuations on CARD#5; and Android's own `AraController` now issues `FF60` on a 339-byte 6-rule catalog (`TASK-260720-1xkffz`) |
+| C9 deterministic SHA-256 simulator vectors | PULL-IN P1 | **DONE** — `Sha256VectorTest` (8 tests, `c9b4880`) closes the dedicated store/byte-exact-readback/keyed-replacement/refresh-per-mutation/coexistence-delete/malformed-rejection contract; hardware SHA-256 grant *and* deny remain a separate evidence layer |
 | C10 CARD#5 capacity/commit evidence | PULL-IN P0 gate | **DONE** — measured at `R=16`, both transaction paths exercised |
 | C11 immutable CAP provenance | PULL-IN P1 | **DONE** — signed CAPs, digests, toolchain manifests |
 | C4 `FF50`, C5 `F2`, C6 `E7`, C8 raw STORE/locks, C12 full v1.1 | WONT-DO | unchanged, and the analysis above reinforces C8 in particular |
 | C7 ARA-C | DEFER | unchanged |
 
-## Recommendations
+## Hardening closed since the 2026-07-20 refresh
 
-Ordered by value per unit of cost. The guiding principle for expressiveness is
-that theirs comes from validating *nothing*; ours must come from validating
-*more shapes*. Every item below preserves the design invariants in
-[IMPROVEMENTS.md](../IMPROVEMENTS.md).
+The 2026-07-20 draft carried eight recommendations, R1-R8. All eight landed in
+the hardening wave and are recorded here as evidence rather than left as open
+advice. Only R9-R10 remain genuinely open (next section).
 
-### Reliability
+**R1 — Prove Android's own `FF60` loop. — DONE.** The standard 3-rule instance
+(156 bytes) fits one response, so WP4's Android run only ever bracketed the rule
+read with two `transmit()` calls (`DF20` + `FF40`) and never exercised `FF60`.
+`TASK-260720-1xkffz` grew the standard AID to 6 rules (339-byte catalog) on
+CARD#5 and re-ran the Android matrix: the enforcer trace now shows **three**
+`transmit()` calls — `DF20`, `FF40` first block, then `FF60` continuation — with
+Android's own `AraController` issuing the `FF60` because it could not read the
+catalog in a single `FF40`. Grant/deny cross-pair isolation held on the enlarged
+catalog. This closes the one seam where our design differed most from every
+implementation Android had previously been tested against.
 
-**R1 — Prove Android's own `FF60` loop. Highest-value remaining gate.**
-WP2 streaming was exercised host-side only: `jc-harness` read an 816-byte
-catalog off the canary in three continuations. The standard instance carries
-three rules, 156 bytes, which fits a single response — so Android's
-`AraController` has issued `FF40` and `DF20` and **never once issued `FF60`**
-against our applet. Verified from the enforcer trace: exactly two `transmit()`
-calls bracket the rule read. Provision at least six rules (past 255 bytes) on
-the standard AID and re-run the Android matrix so the real enforcer must loop
-continuations. Until then the WP2-to-enforcer seam is untested, and it is the
-one seam where our design differs most from every implementation Android has
-been tested against. Cost: one card round-trip with tooling that already exists.
+**R2 — Add an independent SEAC parser as a test oracle. — DONE.** `b5d43df`
+adds `SeacParserOracleTest` (11 tests), which decodes the applet's
+`FF40` + `FF60` stream with GlobalPlatformPro's `pro.javacard.gp.SEAccessControl`
+— an unrelated third-party SEAC implementation — and asserts the recovered rule
+set equals the provisioned one. It deliberately shares no encoding helper with
+`AraMAppletTest` (whose expectations this repo builds itself), so a
+self-consistent-but-wrong encoding that would be invisible against our own
+expectations cannot pass the oracle. The dependency is `testImplementation` only
+and cannot reach the CAP. This closes the comparison's one remaining
+test-quality deficit; with it, our jCardSim + Go suites (103 + 41) now both
+exceed and out-cover the 70-test OSS suite.
 
-**R2 — Add an independent SEAC parser as a test oracle.** This is the one place
-their suite is genuinely better than ours: they decode `FF40`/`FF60` responses
-with GlobalPlatformPro's `pro.javacard.gp.SEAccessControl` rather than with
-their own expectations, so a self-consistent-but-wrong encoding cannot pass.
-Adopt the same oracle in the jCardSim tests, in particular across the BER
-short-form / `81` / `82` length boundaries where our streaming differs from
-everyone else's. Cheap, and it closes the comparison's only test-quality deficit.
+**R3 — Fuzz the TLV validator. — DONE.** `7e1570a` fuzzes **both**
+attacker-influenced parsers with falsifiable oracles —
+`AraMPersonalizationFuzzTest` (11 tests) over the STORE DATA rule bytes and
+`AraMInstallParameterFuzzTest` (7 tests) over the install-parameter block — and
+`aafc22d` makes the must-reject fixtures fail for the specific reason they name.
+On any rejection the catalog and refresh tag stay bit-identical to the entry
+state and no non-ISO exception escapes.
 
-**R3 — Fuzz the TLV validator.** The hand-rolled parser is the only code path
-that consumes attacker-influenced bytes, and it is what the whole security
-boundary rests on. Property test over arbitrary and mutated inputs: `store()`
-must either succeed or throw `ISOException`; on any rejection the catalog and
-the refresh tag must be bit-identical to the entry state; no non-ISO exception
-may escape. Seed the corpus with real encodings — cheeriotb's 41 CTS rules are
-an excellent seed set precisely because they contain shapes we reject.
+**R4 — Close C9. — DONE.** `c9b4880` adds `Sha256VectorTest` (8 tests): the
+dedicated synthetic-`C1 20` store, byte-exact 32-octet readback, exact-`REF-DO`
+replacement leaving neighbours untouched, one-refresh-tag-per-visible-mutation,
+SHA-1/SHA-256 coexistence with individual deletion, and the malformed-width
+rejection trio — all with catalog, refresh tag, and revision unchanged on
+rejection. Ledger C9 is now DONE (see the ledger table above).
 
-**R4 — Close C9.** Add the dedicated SHA-256 store, readback, replacement,
-refresh, and malformed-input assertions. Hardware now proves SHA-256 grant and
-deny, which lowers the risk, but it does not satisfy the deterministic simulator
-contract the ledger asks for.
+**R5 — Bind the manifest's capacity to the pinned release artifact. — DONE.**
+`e25f1a8` cross-checks the desired-state `capacity` against the digest-pinned
+release CAP rather than trusting the manifest, so a capacity mismatch is caught
+at plan time instead of surfacing as a mid-rollout `6A84` at commit. Covered by
+`host/capacity_binding_test.go`.
 
-**R5 — Bind the manifest's capacity to the pinned release artifact.** The
-provisioner currently takes `capacity` from the desired-state manifest and
-trusts it; a mismatch against the installed CAP surfaces only as a `6A84` at
-commit time, mid-rollout. Cross-check it against the digest-pinned release CAP,
-whose toolchain manifest we already retain from the C11 work.
-
-**R6 — Resolve the "installation-time capacity" discrepancy. — DONE.** The
-second, preferred option was implemented: `install()` reads `R` from the
-GlobalPlatform application-specific parameter block, defaults to 16 when absent,
-and clamps to a compiled maximum of 64. Bounded storage *and* field-configurable
-capacity, which no implementation in this comparison has. Covered by
-`InstallParametersTest`; format documented in
+**R6 — Resolve the "installation-time capacity" discrepancy. — DONE.**
+`7271f58`: `install()` reads `R` from the GlobalPlatform application-specific
+parameter block (`80 01 R`, optionally inside its `C9` container), defaults to
+16 when absent, and clamps to a compiled maximum of 64. Every buffer is still
+allocated once, at install, from that value — bounded storage *and*
+field-configurable capacity, which no implementation in this comparison has.
+Covered by `InstallParametersTest`; format documented in
 `docs/architecture/multi-rule-seac-architecture.md` §3.2.
 
-### Expressiveness
+**R7 — Accept `PERM-AR-DO` (`DB`, exactly 8 bytes) alongside `D0`. — DONE.**
+`2e1abc4`: `validateArDo()` now accepts an optional `PERM-AR-DO` after the
+`APDU-AR-DO`, validating SEAC member order and the exact 8-byte length rather
+than accepting opaque bytes. This unlocks the Android carrier-privilege rule
+shape, the most commonly cited real-world rule we could not store. Footprint
+cost is nil — a carrier-privilege rule serialises to roughly 61 bytes, the worst
+realistic case (two APDU filter/mask pairs plus `PERM-AR-DO`) to roughly 76,
+both inside the 96-byte record. **Deployment caveat unchanged:** the pinned
+installed CAP `v0.2.0-rc1` predates this commit, so the capability is present
+and simulator-tested but no `PERM-AR-DO` rule is deployed on the installed CAP.
 
-**R7 — Accept `PERM-AR-DO` (`DB`, exactly 8 bytes) alongside `D0` inside `E3`.**
-This is the highest-value expressiveness item: it unlocks the Android
-carrier-privilege rule shape, the most commonly cited real-world rule we
-currently cannot store. It costs nothing in footprint — a carrier-privilege rule
-serialises to roughly 61 bytes, and the worst realistic case (two APDU
-filter/mask pairs plus `PERM-AR-DO`) to roughly 76, both comfortably inside the
-existing 96-byte record. Validate the member order and the exact 8-byte length
-rather than accepting opaque bytes.
+**R8 — Accept the zero-length `AID-REF-DO` catch-all. — DONE.** `3ca0b83`
+(plan/reconcile) and `3e0561c` (migrate) accept the zero-length `4F` catch-all
+as a storable `REF-DO`; `validateRefDo()` now permits `aidLength == 0`. The
+safety guard lives host-side in the provisioner: a catch-all *allow* rule cannot
+be planned without the explicit `--allow-catch-all` flag, so the card stays a
+faithful SEAC store and the policy decision is reviewable and diffable in the
+desired state.
 
-**R8 — Accept the zero-length `AID-REF-DO` catch-all.** Trivial in the applet.
-Put the safety guard in the host provisioner instead — refuse to plan a
-catch-all *allow* rule without an explicit flag — so the card stays a faithful
-SEAC store and the policy decision lives where it can be reviewed and diffed.
+## Remaining recommendations
+
+Only the two footprint- and semantics-changing expressiveness items are still
+open. Both preserve the design invariants in [IMPROVEMENTS.md](../IMPROVEMENTS.md)
+and should be reopened by a concrete product requirement, not comparison pressure.
 
 **R9 — `NFC-AR-DO` (`D1`).** Only behind a concrete requirement, with the same
 discipline as C12: it changes validation and merge semantics and deserves its
@@ -328,9 +351,13 @@ ownership models, and whose raw mutation surface is closed by construction. It
 is also the only one with host provisioning tooling and captured hardware and
 Android evidence.
 
-The open-source line is ahead on rule-count headroom, on raw expressiveness
-(because it validates nothing), and on unit-test breadth. sysmocom is the only
-external project still maintained, and its `A1` lock is a genuine improvement
+The open-source line retains two honest advantages: unbounded rule-count
+headroom, and the ability to carry the two rule shapes we still reject
+(`NFC-AR-DO`, `PKG-REF-DO`) because it validates nothing. The unit-test-breadth
+and independent-parser-oracle advantages it held at the last refresh are gone —
+our 103 jCardSim + 41 Go tests now exceed their 70, and we run the same
+GlobalPlatformPro SEAC oracle plus TLV fuzzers they never had. sysmocom is the
+only external project still maintained, and its `A1` lock is a genuine improvement
 over upstream — but it is off by default and untested, so an unlocked
 sysmocom ARA-M has an open write surface reachable from the handset. cheeriotb
 should be read for its rule encodings and ignored as an implementation.

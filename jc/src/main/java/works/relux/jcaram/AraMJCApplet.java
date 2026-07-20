@@ -99,7 +99,10 @@ public final class AraMJCApplet extends Applet implements Application {
             }
             short containerLength = (short) (data[cursor++] & (short) 0x00FF);
             blockEnd = (short) (cursor + containerLength);
-            if (blockEnd < cursor || blockEnd > end) {
+            // The C9 container must consume the whole application-specific block.
+            // Bytes trailing the container inside the block are rejected exactly
+            // like trailing bytes after the bare capacity TLV: 6A80, no silent drop.
+            if (blockEnd < cursor || blockEnd != end) {
                 malformed();
             }
         }
