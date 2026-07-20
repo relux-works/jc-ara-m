@@ -177,6 +177,7 @@ func runMigrate(args []string) error {
 	opensslBinary := flags.String("openssl", "openssl", "OpenSSL executable")
 	execute := flags.Bool("execute", false, "perform guarded standard-AID replacement")
 	acknowledgement := flags.String("ack", "", "exact maintenance acknowledgement printed by migration-plan")
+	allowCatchAll := flags.Bool("allow-catch-all", false, "opt in to a desired rule granting access to every SE applet")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -232,6 +233,7 @@ func runMigrate(args []string) error {
 		Capacity:        capacity,
 		InstanceAID:     instanceAID,
 		VerifyRawDenied: reader.VerifyRawStoreDenied,
+		AllowCatchAll:   *allowCatchAll,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
@@ -296,12 +298,14 @@ Commands:
       capacity must equal the capacity the pinned release CAP was built with.
 
   migrate --config FILE --desired FILE [--execute --ack TOKEN
-          --credentials FILE --reader NAME]
+          --credentials FILE --reader NAME] [--allow-catch-all]
       Without --execute, dry-run only. Both modes cross-check the desired
       capacity against the pinned release CAP, so a capacity disagreement is
       refused before any card mutation. Execution requires the exact printed
       maintenance token, pinned signed rollback/canary/release artifacts,
-      complete canary evidence, and a secure exported-rule path.
+      complete canary evidence, and a secure exported-rule path. A desired rule
+      that grants access through the zero-length AID-REF-DO catch-all is refused
+      unless --allow-catch-all is passed, matching plan/reconcile.
 
 All manifests, credentials, and migration config files must be regular,
 non-symlink files with mode 0600 (or stricter). Physical mutation is never an

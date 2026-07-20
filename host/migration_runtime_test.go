@@ -216,6 +216,49 @@ func TestHostMigrationOperationsRunForwardAndRollbackStages(t *testing.T) {
 	}
 }
 
+func TestHostMigrationOperationsCatchAllGrantHonoursAllowFlag(t *testing.T) {
+	catchAllGrant := testRule(t, "", "", 0x01)
+
+	// Fail-closed without the flag: the reconcile stage refuses the catch-all
+	// grant and never touches the sink, matching plan/reconcile.
+	closedState := newMemoryCatalog()
+	closedSink := &interruptingMutator{state: closedState, failAfter: -1}
+	closed := &HostMigrationOperations{
+		Reader: closedState, Sink: closedSink,
+		Desired: []Rule{catchAllGrant}, Capacity: 16,
+		VerifyRawDenied: func(context.Context, Rule) error { return nil },
+	}
+	if err := closed.RunStage(context.Background(), MigrationReconcileDesired, validMigrationConfig()); err == nil {
+		t.Fatal("migrate reconcile accepted a catch-all grant without --allow-catch-all")
+	}
+	if closedSink.calls != 0 {
+		t.Fatalf("sink calls = %d, want 0 when the catch-all grant is refused", closedSink.calls)
+	}
+
+	// With the flag the same catch-all grant reconciles and verifies cleanly.
+	openState := newMemoryCatalog()
+	openSink := &interruptingMutator{state: openState, failAfter: -1}
+	rawChecks := 0
+	open := &HostMigrationOperations{
+		Reader: openState, Sink: openSink,
+		Desired: []Rule{catchAllGrant}, Capacity: 16,
+		VerifyRawDenied: func(context.Context, Rule) error { rawChecks++; return nil },
+		AllowCatchAll:   true,
+	}
+	if err := open.RunStage(context.Background(), MigrationReconcileDesired, validMigrationConfig()); err != nil {
+		t.Fatalf("migrate reconcile with --allow-catch-all: %v", err)
+	}
+	if openSink.calls != 1 {
+		t.Fatalf("sink calls = %d, want 1 after the catch-all grant reconciles", openSink.calls)
+	}
+	if err := open.RunStage(context.Background(), MigrationVerifyRelease, validMigrationConfig()); err != nil {
+		t.Fatalf("migrate verify with --allow-catch-all: %v", err)
+	}
+	if rawChecks != 1 {
+		t.Fatalf("raw-store checks = %d, want 1", rawChecks)
+	}
+}
+
 func TestJCHarnessRawStoreDenialVerification(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{"reader": "test", "results": []map[string]string{{"sw": "9000", "data": ""}, {"sw": "6982", "data": ""}}})
 	runner := &recordingRunner{output: payload}

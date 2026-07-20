@@ -296,6 +296,18 @@ type HostMigrationOperations struct {
 	InstanceAID     []byte
 	Exported        []Rule
 	VerifyRawDenied func(context.Context, Rule) error
+	// AllowCatchAll opts the migration's desired-state reconciliation and
+	// verification into the same host catch-all-grant policy that plan/reconcile
+	// honour. Without it a legitimate catch-all grant in the desired manifest
+	// fails closed on the migrate path.
+	AllowCatchAll bool
+}
+
+func (o *HostMigrationOperations) planOptions() []PlanOption {
+	if !o.AllowCatchAll {
+		return nil
+	}
+	return []PlanOption{AllowCatchAllGrants()}
 }
 
 func (o *HostMigrationOperations) RunStage(ctx context.Context, stage MigrationStage, config MigrationConfig) error {
@@ -382,7 +394,7 @@ func (o *HostMigrationOperations) installStandard(ctx context.Context, capPath s
 
 func (o *HostMigrationOperations) reconcile(ctx context.Context, desired []Rule, execute bool) error {
 	reconciler := Reconciler{Source: o.Reader, Sink: o.Sink}
-	result, err := reconciler.Reconcile(ctx, desired, o.Capacity, execute)
+	result, err := reconciler.Reconcile(ctx, desired, o.Capacity, execute, o.planOptions()...)
 	if err != nil {
 		return err
 	}
@@ -400,7 +412,7 @@ func (o *HostMigrationOperations) verifyCatalogAndRawStore(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	remaining, err := PlanDiff(snapshot.Rules, desired, o.Capacity)
+	remaining, err := PlanDiff(snapshot.Rules, desired, o.Capacity, o.planOptions()...)
 	if err != nil {
 		return err
 	}
